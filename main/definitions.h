@@ -1,0 +1,22 @@
+#ifndef DEFINITIONS_H
+#define DEFINITIONS_H
+
+// Outputs
+#define OUTPUT_1_INDIS 5
+#define OUTPUT_2_INDIS 6
+#define OUTPUT_3_INDIS 7
+#define OUTPUT_4_INDIS 8
+#define OUTPUT_5_INDIS 9
+#define OUTPUT_6_INDIS 10
+#define OUTPUT_7_INDIS 11
+#define OUTPUT_8_INDIS 12
+#define OUTPUT_9_INDIS 13
+#define OUTPUT_10_INDIS 14
+#define OUTPUT_11_INDIS 15
+#define OUTPUT_12_INDIS 16
+#define OUTPUT_13_INDIS 17
+#define OUTPUT_14_INDIS 18
+#define OUTPUT_15_INDIS 19
+#define OUTPUT_16_INDIS 20
+
+#endif // DEFINITIONS_H

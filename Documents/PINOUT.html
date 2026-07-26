@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VanGO Display — Pinout (4.3" / 7")</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --border: #2d3a4f;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #3d8bfd;
+      --shared: #2d6a4f;
+      --diff-43: #b8860b;
+      --diff-7: #7b2cbf;
+      --warn: #e9c46a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(135deg, #1a2332 0%, #0f1419 100%);
+    }
+    h1 { margin: 0 0 0.35rem; font-size: 1.45rem; font-weight: 600; }
+    .subtitle { color: var(--muted); font-size: 0.9rem; margin: 0; }
+    main { max-width: 1100px; margin: 0 auto; padding: 1.25rem 1.5rem 2.5rem; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      padding: 1rem 1.15rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .toolbar label { font-weight: 600; font-size: 0.9rem; }
+    .panel-switch {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel-switch button {
+      padding: 0.55rem 1.1rem;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: background 0.15s, color 0.15s;
+    }
+    .panel-switch button.active {
+      background: var(--accent);
+      color: #fff;
+    }
+    .panel-switch button[data-panel="43"].active { background: var(--diff-43); }
+    .panel-switch button[data-panel="7"].active { background: var(--diff-7); }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.55rem;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .badge-shared { background: var(--shared); color: #d8f3dc; }
+    .badge-diff { background: #4a3728; color: var(--warn); }
+    .badge-active-firmware {
+      background: #1d3557;
+      color: #a8dadc;
+      margin-left: 0.5rem;
+    }
+    section {
+      margin-bottom: 1.75rem;
+    }
+    section h2 {
+      font-size: 1.05rem;
+      margin: 0 0 0.75rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+      color: #cbd5e1;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 0.6rem 0.85rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      background: #243044;
+      color: #94a3b8;
+      font-weight: 600;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr.row-diff td { background: rgba(233, 196, 106, 0.08); }
+    tr.row-diff-only-7 td { background: rgba(123, 44, 191, 0.1); }
+    tr.row-diff-only-43 td { background: rgba(184, 134, 11, 0.1); }
+    tr.hidden { display: none; }
+    code, .mono {
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 0.84em;
+      background: #0d1117;
+      padding: 0.12rem 0.35rem;
+      border-radius: 3px;
+    }
+    .note {
+      padding: 0.85rem 1rem;
+      background: #1e2a3a;
+      border-left: 3px solid var(--accent);
+      border-radius: 0 6px 6px 0;
+      font-size: 0.88rem;
+      color: var(--muted);
+      margin-bottom: 1.25rem;
+    }
+    .note strong { color: var(--text); }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    .summary-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+    }
+    .summary-card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; }
+    .summary-card .value { font-size: 1.1rem; font-weight: 600; margin-top: 0.2rem; }
+    footer {
+      margin-top: 2rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .source-list { margin: 0; padding-left: 1.2rem; }
+    .source-list li { margin: 0.25rem 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>VanGO Display — ESP32-S3 Pinout</h1>
+    <p class="subtitle">Waveshare RGB panel · ST7701 · GT911 · Kaynak: firmware v0-30 (git commit 8291847)</p>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <label for="panel-group">Panel seçimi:</label>
+      <div class="panel-switch" id="panel-group" role="group" aria-label="Panel boyutu">
+        <button type="button" data-panel="7" class="active">7 inch</button>
+        <button type="button" data-panel="43">4.3 inch</button>
+      </div>
+      <span id="firmware-badge" class="badge badge-active-firmware">Aktif firmware: 7"</span>
+    </div>
+
+    <div class="note" id="panel-note">
+      <strong>7" profili</strong> şu an derlenmiş firmware ile uyumludur (CAN GPIO 20/19, backlight 0x3E/0x3A).
+      UI çözünürlüğü firmware’de <strong>800×480</strong> (<code>lvgl_port.h</code>). Fiziksel panel 800×400 ise dikey çözünürlüğü kodda güncellemeniz gerekir.
+    </div>
+
+    <div class="summary-grid" id="summary"></div>
+
+    <section>
+      <h2>Panel’e göre değişen bağlantılar</h2>
+      <table id="table-diff">
+        <thead>
+          <tr>
+            <th>Fonksiyon</th>
+            <th>4.3"</th>
+            <th>7"</th>
+            <th>Kaynak dosya</th>
+            <th>Not</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Ortak pinler (her iki panel)</h2>
+      <table id="table-shared">
+        <thead>
+          <tr>
+            <th>Fonksiyon</th>
+            <th>GPIO / Değer</th>
+            <th>Kaynak</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>RGB LCD (16-bit) — DATA pinleri</h2>
+      <table id="table-rgb">
+        <thead>
+          <tr>
+            <th>Sinyal</th>
+            <th>GPIO</th>
+            <th>Not (renk kanalı)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>CAN (TWAI) — yazılım protokolü</h2>
+      <table id="table-can-proto">
+        <thead>
+          <tr>
+            <th>Frame ID</th>
+            <th>İçerik (RX)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p style="font-size:0.85rem;color:var(--muted);margin-top:0.5rem;">
+        Hız: 500 kbit/s · Mod: <code>TWAI_MODE_NO_ACK</code> · Bağlantı durumu: <code>canbusConnection</code>
+      </p>
+    </section>
+
+    <section>
+      <h2>Kablolama özeti (seçili panel)</h2>
+      <table id="table-wiring">
+        <thead>
+          <tr>
+            <th>Dış dünya</th>
+            <th>ESP32-S3</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <footer>
+      <p><strong>Kaynak dosyalar</strong></p>
+      <ul class="source-list">
+        <li><code>components/hexnet/src/hexnet_canbus.c</code> — CAN TX/RX</li>
+        <li><code>main/waveshare_rgb_lcd_port.c</code> — Backlight (CH422G over I2C)</li>
+        <li><code>main/waveshare_rgb_lcd_port.h</code> — RGB + touch I2C</li>
+        <li><code>components/hexnet/inc/panel_pinout.h</code> — panel profili (menuconfig)</li>
+        <li><code>main/lvgl_port.h</code> — 800×480</li>
+        <li>Git: <code>8291847</code> — “can com issue fix for 7 inch”</li>
+      </ul>
+      <p style="margin-top:0.75rem;">
+        Panel seçimi: <code>idf.py menuconfig</code> → Example Configuration → VanGO panel size.
+        Makrolar: <code>components/hexnet/inc/panel_pinout.h</code>.
+      </p>
+    </footer>
+  </main>
+
+  <script>
+    const PANELS = {
+      "43": {
+        label: '4.3"',
+        firmwareDefault: false,
+        resolution: "800 × 480",
+        canTx: 15,
+        canRx: 16,
+        blOn: "0x1E",
+        blOff: "0x1A",
+        note: '<strong>4.3" profili</strong> git geçmişindeki eski değerlerdir (CAN GPIO 15/16, backlight 0x1E/0x1A). ' +
+              'Şu anki <code>main</code> dalında varsayılan 7" profilidir; 4.3" kartta flash öncesi pinleri değiştirin.'
+      },
+      "7": {
+        label: '7"',
+        firmwareDefault: true,
+        resolution: "800 × 480",
+        canTx: 20,
+        canRx: 19,
+        blOn: "0x3E",
+        blOff: "0x3A",
+        note: '<strong>7" profili</strong> mevcut firmware ile uyumludur (commit 8291847). CAN ve backlight bu panele göre ayarlı.'
+      }
+    };
+
+    const DIFF_ROWS = [
+      {
+        func: "CAN / TWAI TX",
+        src: "hexnet_canbus.c",
+        note: "IO modülü / karavan CAN hattı"
+      },
+      {
+        func: "CAN / TWAI RX",
+        src: "hexnet_canbus.c",
+        note: "IO modülü / karavan CAN hattı"
+      },
+      {
+        func: "Backlight ON (I2C → 0x38)",
+        src: "waveshare_rgb_lcd_port.c",
+        note: "CH422G genişletici; GPIO değil, register"
+      },
+      {
+        func: "Backlight OFF (I2C → 0x38)",
+        src: "waveshare_rgb_lcd_port.c",
+        note: "CH422G genişletici"
+      },
+      {
+        func: "CH422G config (I2C → 0x24)",
+        src: "waveshare_rgb_lcd_port.c",
+        note: "Her iki panelde 0x01 (ortak)"
+      }
+    ];
+
+    const SHARED = [
+      { func: "Touch + panel I2C SCL", gpio: "GPIO 9", src: "waveshare_rgb_lcd_port.h" },
+      { func: "Touch + panel I2C SDA", gpio: "GPIO 8", src: "waveshare_rgb_lcd_port.h" },
+      { func: "I2C port", gpio: "I2C_NUM_0 @ 400 kHz", src: "waveshare_rgb_lcd_port.h" },
+      { func: "Panel control GPIO", gpio: "GPIO 4", src: "waveshare_rgb_lcd_port.h" },
+      { func: "RGB VSYNC", gpio: "GPIO 3", src: "waveshare_rgb_lcd_port.h" },
+      { func: "RGB HSYNC", gpio: "GPIO 46", src: "waveshare_rgb_lcd_port.h" },
+      { func: "RGB DE", gpio: "GPIO 5", src: "waveshare_rgb_lcd_port.h" },
+      { func: "RGB PCLK", gpio: "GPIO 7", src: "waveshare_rgb_lcd_port.h" },
+      { func: "RGB pixel clock", gpio: "16 MHz", src: "waveshare_rgb_lcd_port.h" },
+      { func: "Touch RST / INT", gpio: "Kullanılmıyor (-1)", src: "waveshare_rgb_lcd_port.h" },
+      { func: "Disp EN (RGB)", gpio: "Kullanılmıyor (-1)", src: "waveshare_rgb_lcd_port.h" },
+      { func: "LVGL çözünürlük", gpio: "800 × 480", src: "lvgl_port.h" },
+      { func: "USB-UART (flash/monitor)", gpio: "USB Serial/JTAG (tipik COM port)", src: "sdkconfig" },
+      { func: "BLE", gpio: "Dahili radio (pin yok)", src: "hexnet_bluetooth.c" },
+      { func: "Modbus RTU (opsiyonel)", gpio: "UART2, 115200 — init kapalı", src: "data_manager.c" }
+    ];
+
+    const RGB_DATA = [
+      ["DATA0", 14, "B3"], ["DATA1", 38, "B4"], ["DATA2", 18, "B5"], ["DATA3", 17, "B6"],
+      ["DATA4", 10, "B7"], ["DATA5", 39, "G2"], ["DATA6", 0, "G3"], ["DATA7", 45, "G4"],
+      ["DATA8", 48, "G5"], ["DATA9", 47, "G6"], ["DATA10", 21, "G7"], ["DATA11", 1, "R3"],
+      ["DATA12", 2, "R4"], ["DATA13", 42, "R5"], ["DATA14", 41, "R6"], ["DATA15", 40, "R7"]
+    ];
+
+    const CAN_FRAMES = [
+      ["0x100", "Voltage (B0-1), Outputs (B2-3), Inputs (B4-5)"],
+      ["0x200", "Analog inputs [0-3], Dimmable outputs [4-7]"],
+      ["0x300", "RGB R,G,B, enable (B0-3), Temp (B4), Humidity (B5)"]
+    ];
+
+    let activePanel = "7";
+
+    function el(id) { return document.getElementById(id); }
+
+    function renderSummary() {
+      const p = PANELS[activePanel];
+      const other = activePanel === "7" ? PANELS["43"] : PANELS["7"];
+      el("summary").innerHTML = `
+        <div class="summary-card"><div class="label">Seçili panel</div><div class="value">${p.label}</div></div>
+        <div class="summary-card"><div class="label">Çözünürlük (firmware)</div><div class="value">${p.resolution}</div></div>
+        <div class="summary-card"><div class="label">CAN TX</div><div class="value">GPIO ${p.canTx}</div></div>
+        <div class="summary-card"><div class="label">CAN RX</div><div class="value">GPIO ${p.canRx}</div></div>
+        <div class="summary-card"><div class="label">Diğer panel CAN</div><div class="value">TX ${other.canTx} / RX ${other.canRx}</div></div>
+        <div class="summary-card"><div class="label">Backlight ON/OFF</div><div class="value">${p.blOn} / ${p.blOff}</div></div>
+      `;
+    }
+
+    function renderDiffTable() {
+      const p43 = PANELS["43"];
+      const p7 = PANELS["7"];
+      const keys = ["canTx", "canRx", "blOn", "blOff"];
+      const vals43 = [p43.canTx, p43.canRx, p43.blOn, p43.blOff];
+      const vals7 = [p7.canTx, p7.canRx, p7.blOn, p7.blOff];
+
+      el("table-diff").querySelector("tbody").innerHTML = DIFF_ROWS.map((row, i) => {
+        const v43 = typeof vals43[i] === "number" ? `GPIO ${vals43[i]}` : vals43[i];
+        const v7 = typeof vals7[i] === "number" ? `GPIO ${vals7[i]}` : vals7[i];
+        const highlight43 = activePanel === "43" ? "row-diff-only-43" : "";
+        const highlight7 = activePanel === "7" ? "row-diff-only-7" : "";
+        const rowClass = activePanel === "43" ? highlight43 : highlight7;
+        return `<tr class="row-diff ${rowClass}">
+          <td>${row.func}</td>
+          <td><code>${v43}</code></td>
+          <td><code>${v7}</code></td>
+          <td><code>${row.src}</code></td>
+          <td>${row.note}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    function renderShared() {
+      el("table-shared").querySelector("tbody").innerHTML = SHARED.map(r =>
+        `<tr><td>${r.func}</td><td><code>${r.gpio}</code></td><td><code>${r.src}</code></td></tr>`
+      ).join("");
+    }
+
+    function renderRgb() {
+      el("table-rgb").querySelector("tbody").innerHTML = RGB_DATA.map(([sig, gpio, ch]) =>
+        `<tr><td>${sig}</td><td><code>GPIO ${gpio}</code></td><td>${ch}</td></tr>`
+      ).join("");
+    }
+
+    function renderCanProto() {
+      el("table-can-proto").querySelector("tbody").innerHTML = CAN_FRAMES.map(([id, desc]) =>
+        `<tr><td><code>${id}</code></td><td>${desc}</td></tr>`
+      ).join("");
+    }
+
+    function renderWiring() {
+      const p = PANELS[activePanel];
+      const rows = [
+        ["CAN transceiver TX → ESP", `GPIO ${p.canTx}`],
+        ["CAN transceiver RX → ESP", `GPIO ${p.canRx}`],
+        ["GT911 / panel I2C SCL", "GPIO 9"],
+        ["GT911 / panel I2C SDA", "GPIO 8"],
+        ["CH422G I2C (backlight)", "Adres 0x24, 0x38 (aynı I2C bus)"],
+        ["RGB LCD", "GPIO 0–48 (tablo üstte)"],
+        ["Panel enable", "GPIO 4"]
+      ];
+      el("table-wiring").querySelector("tbody").innerHTML = rows.map(([a, b]) =>
+        `<tr><td>${a}</td><td><code>${b}</code></td></tr>`
+      ).join("");
+    }
+
+    function setPanel(panel) {
+      activePanel = panel;
+      document.querySelectorAll(".panel-switch button").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.panel === panel);
+      });
+      el("panel-note").innerHTML = PANELS[panel].note;
+      el("firmware-badge").textContent = PANELS["7"].firmwareDefault && panel === "7"
+        ? 'Aktif firmware: 7"'
+        : panel === "43"
+          ? 'Seçili görünüm: 4.3" (firmware hâlâ 7" pinleri)'
+          : 'Aktif firmware: 7"';
+      renderSummary();
+      renderDiffTable();
+      renderWiring();
+    }
+
+    document.querySelectorAll(".panel-switch button").forEach(btn => {
+      btn.addEventListener("click", () => setPanel(btn.dataset.panel));
+    });
+
+    renderShared();
+    renderRgb();
+    renderCanProto();
+    setPanel("7");
+  </script>
+</body>
+</html>

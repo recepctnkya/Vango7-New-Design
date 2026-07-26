@@ -1,0 +1,19 @@
+Android
+Android uygulama da motor yazilimi eklenecek
+RGB buton pop up seklinde acilsin ve toggle button ile aktif pasif yapsin
+Panel ayarlarinda iconlarin degistilebildigini gosteren oklar
+ayarlar sayfasindaki ufak toggle butonlarin rengi degistirilecek
+Dil secenegi
+
+
+Sadece Tablet ve IO modulu yapisi eklenecek
+
+
+
+IO MOdulu
+Sicaklik senosuru donanumini calistiricaksin
+Yeni IO modulu.
+Yeni io modulu kutusu ve yeni sicaklik sensoru kutusu.
+
+
+
