@@ -86,9 +86,15 @@ extern "C" {
 
 #define VANGO_CAN_BITRATE_KBPS       500
 #define VANGO_CAN_FRAME_VOLTAGE_IO   0x100
-#define VANGO_CAN_FRAME_IO_PROFILE   0x110 /* IO flash SoT: relay/dim/sensor masks */
-#define VANGO_CAN_FRAME_ANALOG_DIM   0x200
+#define VANGO_CAN_FRAME_IO_PROFILE   0x110 /* IO flash SoT: relay/dim/sensor masks + theme/lang */
+#define VANGO_CAN_FRAME_ANALOG_DIM   0x200 /* analog[0..3] + dim[0..3] */
+#define VANGO_CAN_FRAME_ANALOG_DIM_B 0x210 /* dim[4..7] (IO v0.60 8-dim) */
 #define VANGO_CAN_FRAME_RGB_SENSORS  0x300
+#define VANGO_CAN_FRAME_THEME_LANG   0x760 /* Display → IO theme/language write */
+#define VANGO_CAN_FRAME_IO_PROFILE_SET 0x761 /* Display → IO: enable mask write (aktif/pasif) */
+#define VANGO_CAN_FRAME_LABEL_NAME_SET 0x762 /* Display → IO: relay name chunk [slot][part][6] */
+#define VANGO_CAN_FRAME_LABEL_ICON_SET 0x763 /* Display → IO: relay icon key chunk [slot][part][6] */
+#define VANGO_CAN_FRAME_DISP_PWR     0x770 /* Display → IO: Display 5V EN / hard reset */
 
 /* -------------------------------------------------------------------------- */
 /* RGB LCD — senkron ve clock (ortak, waveshare_rgb_lcd_port.h ile aynı)       */

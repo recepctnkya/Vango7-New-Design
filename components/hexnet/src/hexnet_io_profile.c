@@ -1,12 +1,18 @@
 #include "hexnet_io_profile.h"
+#include "hexnet_io_labels.h"
 
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 
-void save_panel_configuration_to_nvs(int totalOutps, int buffer1[16], int totalSensors, int buffer2[5], int totalDims, int buffer3[4]);
-void load_panel_configuration_from_nvs(int *totalOutpts, int buffer1[16], int *totalSensors, int buffer2[5], int *totalDims, int buffer3[4]);
+void save_panel_configuration_to_nvs(int totalOutps, int buffer1[16], int totalSensors, int buffer2[5], int totalDims, int buffer3[8]);
+void load_panel_configuration_from_nvs(int *totalOutpts, int buffer1[16], int *totalSensors, int buffer2[5], int *totalDims, int buffer3[8]);
 void set_RGBTurnONOFF(int val);
+void hexnet_can_push_io_profile_set(void);
 #include "nvs.h"
 
 static const char *TAG = "HEXNET_IO_PROFILE";
@@ -14,7 +20,7 @@ static const char *TAG = "HEXNET_IO_PROFILE";
 #define NVS_NS "hexnet"
 #define NVS_KEY "io_profile"
 #define PROFILE_MAGIC 0x314F4948u /* "HIO1" */
-#define PROFILE_VERSION 1
+#define PROFILE_VERSION 2
 
 typedef struct __attribute__((packed)) {
     uint32_t magic;
@@ -45,7 +51,7 @@ extern int numOfDims;
 extern int numOfSensors;
 extern int outputsBuffer[16];
 extern int sensorsBuffer[5];
-extern int dimsBuffer[4];
+extern int dimsBuffer[8];
 
 
 static uint8_t count_bits8(uint8_t v)
@@ -71,18 +77,18 @@ static uint8_t count_bits16(uint16_t v)
 static void profile_set_defaults(hexnet_io_profile_t *p)
 {
     memset(p, 0, sizeof(*p));
-    p->num_relays = 4;
-    p->num_dims = 4;
+    p->num_relays = 12;
+    p->num_dims = 8;
     p->num_sensors = 5;
     p->num_tanks = 3;
     p->motor_enabled = 1;
     p->rgb_enabled = 1;
-    p->relay_enable_mask = 0x000Fu;
-    p->dim_enable_mask = 0x0Fu;
+    p->relay_enable_mask = 0x0FFFu;
+    p->dim_enable_mask = 0xFFu; /* IO/tablet ile ayni: 8 dimmer */
     p->sensor_enable_mask = 0x1Fu;
     p->tank_enable_mask = 0x07u;
     for (int i = 0; i < HEXNET_IO_RELAY_SLOTS; ++i) {
-        p->relay_type[i] = (uint8_t)((i < 4) ? 1 : 0);
+        p->relay_type[i] = 1;
     }
     for (int i = 0; i < HEXNET_IO_DIM_SLOTS; ++i) {
         p->dim_type[i] = 1;
@@ -113,7 +119,7 @@ static void blob_from_profile(const hexnet_io_profile_t *p, hexnet_io_profile_bl
     b->num_dims = p->num_dims;
     b->num_sensors = p->num_sensors;
     b->num_tanks = p->num_tanks;
-    b->motor_enabled = p->motor_enabled ? 1 : 0;
+    b->motor_enabled = (uint8_t)(p->motor_enabled & 0x03u);
     b->rgb_enabled = p->rgb_enabled ? 1 : 0;
     b->relay_enable_mask = p->relay_enable_mask;
     b->dim_enable_mask = p->dim_enable_mask;
@@ -245,7 +251,8 @@ void hexnet_io_profile_sync_legacy_globals(void)
         }
     }
 
-    save_panel_configuration_to_nvs(numOfOutputs, outputsBuffer, numOfSensors, sensorsBuffer, numOfDims, dimsBuffer);
+    /* Sadece RAM legacy buffer. NVS blob zaten hexnet_io_profile_save ile yazilir.
+     * Her switch'te 30+ nvs_write_int LVGL task'inda WDT/reset yapabiliyordu. */
 }
 
 static void profile_apply_hw_enable_flags(void)
@@ -272,12 +279,175 @@ void hexnet_io_profile_init(void)
 
     hexnet_io_profile_sync_legacy_globals();
     profile_apply_hw_enable_flags();
+    hexnet_io_labels_init();
     s_loaded = true;
 }
 
 const hexnet_io_profile_t *hexnet_io_profile_get(void)
 {
     return &s_profile;
+}
+
+/*
+ * NVS asla LVGL / esp_timer callback'inden yazilmamali
+ * (S3: spi_flash cache assert / Interrupt WDT → reset).
+ * Ayrı dusuk oncelikli task + debounce.
+ */
+static bool s_nvs_dirty;
+static int64_t s_local_edit_guard_us;
+static QueueHandle_t s_save_q;
+static TaskHandle_t s_save_task;
+
+static void profile_save_task(void *arg)
+{
+    (void)arg;
+    uint32_t token;
+    for (;;) {
+        if (xQueueReceive(s_save_q, &token, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        /* LVGL frame / SPI flush bitsin */
+        vTaskDelay(pdMS_TO_TICKS(100));
+        while (xQueueReceive(s_save_q, &token, 0) == pdTRUE) {
+            /* coalesce */
+        }
+        if (!s_nvs_dirty) {
+            continue;
+        }
+        s_nvs_dirty = false;
+        ESP_LOGI(TAG, "Profil NVS task yaziyor mask=0x%04X",
+                 (unsigned)s_profile.relay_enable_mask);
+        (void)hexnet_io_profile_save();
+    }
+}
+
+static void profile_schedule_nvs_save(void)
+{
+    s_nvs_dirty = true;
+    if (!s_save_q) {
+        s_save_q = xQueueCreate(1, sizeof(uint32_t));
+    }
+    if (!s_save_task && s_save_q) {
+        BaseType_t ok = xTaskCreate(profile_save_task, "io_prof_nvs", 4096, NULL, 3, &s_save_task);
+        if (ok != pdPASS) {
+            s_save_task = NULL;
+            ESP_LOGE(TAG, "NVS save task create failed");
+            return;
+        }
+    }
+    if (s_save_q) {
+        uint32_t token = 1;
+        (void)xQueueOverwrite(s_save_q, &token);
+    }
+}
+
+static esp_err_t profile_commit_local(void)
+{
+    profile_recompute_counts(&s_profile);
+    s_profile.link_flags |= HEXNET_IO_LINK_DISPLAY;
+    hexnet_io_profile_sync_legacy_globals();
+    /* IO 0x110 eski maskeyi geri yazmasin; 0x761 ile SoT guncelle */
+    s_local_edit_guard_us = esp_timer_get_time() + 15000000LL;
+    profile_schedule_nvs_save();
+    hexnet_can_push_io_profile_set();
+    ESP_LOGI(TAG, "Profil RAM+TX0x761 mask=0x%04X",
+             (unsigned)s_profile.relay_enable_mask);
+    return ESP_OK;
+}
+
+void hexnet_io_profile_poll_save(void)
+{
+    /* no-op: kayit ayri task */
+}
+
+esp_err_t hexnet_io_profile_set_relay(int index, bool enabled, int type)
+{
+    if (index < 0 || index >= HEXNET_IO_RELAY_SLOTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (type < 1) {
+        type = 1;
+    }
+    if (type > 18) {
+        type = 18;
+    }
+    /* Tip her zaman yazilir (pasifken de secim kaybolmasin). */
+    s_profile.relay_type[index] = (uint8_t)type;
+    if (enabled) {
+        s_profile.relay_enable_mask |= (uint16_t)(1u << index);
+    } else {
+        s_profile.relay_enable_mask &= (uint16_t)~(1u << index);
+    }
+    return profile_commit_local();
+}
+
+esp_err_t hexnet_io_profile_set_dim(int index, bool enabled, int type)
+{
+    if (index < 0 || index >= HEXNET_IO_DIM_SLOTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (type < 1) {
+        type = 1;
+    }
+    if (type > 8) {
+        type = 8;
+    }
+    if (enabled) {
+        s_profile.dim_enable_mask |= (uint8_t)(1u << index);
+        s_profile.dim_type[index] = (uint8_t)type;
+    } else {
+        s_profile.dim_enable_mask &= (uint8_t)~(1u << index);
+    }
+    return profile_commit_local();
+}
+
+esp_err_t hexnet_io_profile_set_sensor(int index, bool enabled)
+{
+    if (index < 0 || index >= HEXNET_IO_SENSOR_SLOTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (enabled) {
+        s_profile.sensor_enable_mask |= (uint8_t)(1u << index);
+        if (s_profile.sensor_type[index] == 0) {
+            s_profile.sensor_type[index] = 1;
+        }
+    } else {
+        s_profile.sensor_enable_mask &= (uint8_t)~(1u << index);
+    }
+    return profile_commit_local();
+}
+
+esp_err_t hexnet_io_profile_set_tank(int index, bool enabled)
+{
+    if (index < 0 || index >= HEXNET_IO_TANK_SLOTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (enabled) {
+        s_profile.tank_enable_mask |= (uint8_t)(1u << index);
+    } else {
+        s_profile.tank_enable_mask &= (uint8_t)~(1u << index);
+    }
+    return profile_commit_local();
+}
+
+esp_err_t hexnet_io_profile_set_motor(int index, bool enabled)
+{
+    if (index < 0 || index >= HEXNET_IO_MOTOR_SLOTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (enabled) {
+        s_profile.motor_enabled |= (uint8_t)(1u << index);
+    } else {
+        s_profile.motor_enabled &= (uint8_t)~(1u << index);
+    }
+    s_profile.motor_enabled &= 0x03u;
+    return profile_commit_local();
+}
+
+esp_err_t hexnet_io_profile_set_rgb(bool enabled)
+{
+    s_profile.rgb_enabled = enabled ? 1 : 0;
+    return profile_commit_local();
 }
 
 esp_err_t hexnet_io_profile_save(void)
@@ -491,7 +661,11 @@ esp_err_t hexnet_io_profile_apply_json(const cJSON *json, uint8_t link_flag)
     }
 
     if (motor_en) {
-        s_profile.motor_enabled = (uint8_t)json_bool(motor_en, s_profile.motor_enabled);
+        if (json_bool(motor_en, s_profile.motor_enabled & 1u)) {
+            s_profile.motor_enabled |= 0x01u;
+        } else {
+            s_profile.motor_enabled &= (uint8_t)~0x01u;
+        }
     }
     if (rgb_en || rgb_en2) {
         s_profile.rgb_enabled = (uint8_t)json_bool(rgb_en ? rgb_en : rgb_en2, s_profile.rgb_enabled);
@@ -539,7 +713,8 @@ void hexnet_io_profile_append_to_json(cJSON *parent, const char *object_name)
     cJSON_AddNumberToObject(io, "dimmers", s_profile.num_dims);
     cJSON_AddNumberToObject(io, "sensors", s_profile.num_sensors);
     cJSON_AddNumberToObject(io, "tanks", s_profile.num_tanks);
-    cJSON_AddBoolToObject(io, "motor", s_profile.motor_enabled != 0);
+    cJSON_AddBoolToObject(io, "motor", (s_profile.motor_enabled & 0x01u) != 0);
+    cJSON_AddNumberToObject(io, "motor_mask", s_profile.motor_enabled & 0x03u);
     cJSON_AddBoolToObject(io, "rgb", s_profile.rgb_enabled != 0);
     cJSON_AddNumberToObject(io, "relay_mask", s_profile.relay_enable_mask);
     cJSON_AddNumberToObject(io, "dim_mask", s_profile.dim_enable_mask);
@@ -572,7 +747,7 @@ bool hexnet_io_profile_sensor_slot_enabled(uint8_t index)
 
 bool hexnet_io_profile_motor_enabled(void)
 {
-    return s_profile.motor_enabled != 0;
+    return (s_profile.motor_enabled & 0x01u) != 0;
 }
 
 bool hexnet_io_profile_rgb_enabled(void)
@@ -599,15 +774,26 @@ bool hexnet_io_profile_apply_can_core(uint16_t relay_mask,
         (s_profile.dim_enable_mask == dim_mask) &&
         (s_profile.sensor_enable_mask == sensor_mask) &&
         (s_profile.tank_enable_mask == tank_mask) &&
-        ((s_profile.motor_enabled != 0) == (motor_enabled != 0)) &&
+        (((s_profile.motor_enabled & 0x01u) != 0) == (motor_enabled != 0)) &&
         ((s_profile.rgb_enabled != 0) == (rgb_enabled != 0));
+
+    /* Display yerel edit: IO eski SoT gelirse ezme, 0x761 tekrar it */
+    if (!same && (s_profile.link_flags & HEXNET_IO_LINK_DISPLAY) &&
+        esp_timer_get_time() < s_local_edit_guard_us) {
+        ESP_LOGW(TAG, "CAN 0x110 atlandi (local edit) can=0x%04X local=0x%04X — re-TX 0x761",
+                 (unsigned)relay_mask, (unsigned)s_profile.relay_enable_mask);
+        hexnet_can_push_io_profile_set();
+        return false;
+    }
 
     /* Hibrit: ayni seq + ayni icerik = heartbeat, UI dokunma */
     if (same && seq == s_last_seq) {
+        s_profile.link_flags = (uint8_t)(s_profile.link_flags & ~(uint8_t)HEXNET_IO_LINK_DISPLAY);
         return false;
     }
     if (same && seq != s_last_seq) {
         s_last_seq = seq;
+        s_profile.link_flags = (uint8_t)(s_profile.link_flags & ~(uint8_t)HEXNET_IO_LINK_DISPLAY);
         ESP_LOGW(TAG, "CAN 0x110 heartbeat seq=%u (icerik ayni R=%u)",
                  (unsigned)seq, (unsigned)s_profile.num_relays);
         return false;
@@ -617,7 +803,11 @@ bool hexnet_io_profile_apply_can_core(uint16_t relay_mask,
     s_profile.dim_enable_mask = dim_mask;
     s_profile.sensor_enable_mask = sensor_mask;
     s_profile.tank_enable_mask = tank_mask;
-    s_profile.motor_enabled = motor_enabled ? 1 : 0;
+    if (motor_enabled) {
+        s_profile.motor_enabled |= 0x01u;
+    } else {
+        s_profile.motor_enabled &= (uint8_t)~0x01u;
+    }
     s_profile.rgb_enabled = rgb_enabled ? 1 : 0;
     /* Display bu profili uretmedi; IO flash SoT mirror */
     s_profile.link_flags = (uint8_t)(s_profile.link_flags & ~(uint8_t)HEXNET_IO_LINK_DISPLAY);
@@ -639,7 +829,8 @@ bool hexnet_io_profile_apply_can_core(uint16_t relay_mask,
     }
 
     profile_recompute_counts(&s_profile);
-    (void)hexnet_io_profile_save();
+    hexnet_io_profile_sync_legacy_globals();
+    profile_schedule_nvs_save(); /* NVS LVGL disinda */
     s_ui_dirty = true;
     s_last_seq = seq;
     ESP_LOGI(TAG, "CAN 0x110 IO SoT uygulandi: R=%u mask=0x%04X D=%u S=%u seq=%u",
@@ -649,6 +840,31 @@ bool hexnet_io_profile_apply_can_core(uint16_t relay_mask,
              (unsigned)s_profile.num_sensors,
              (unsigned)seq);
     return true;
+}
+
+bool hexnet_io_profile_apply_can_relay_types(const uint8_t types[HEXNET_IO_RELAY_SLOTS])
+{
+    bool changed = false;
+    if (!types || !s_loaded) {
+        return false;
+    }
+    for (int i = 0; i < HEXNET_IO_RELAY_SLOTS; ++i) {
+        uint8_t t = types[i];
+        if (t > 18) {
+            t = 1;
+        }
+        if (s_profile.relay_type[i] != t) {
+            s_profile.relay_type[i] = t;
+            changed = true;
+        }
+    }
+    if (changed) {
+        hexnet_io_profile_sync_legacy_globals();
+        profile_schedule_nvs_save();
+        s_ui_dirty = true;
+        ESP_LOGI(TAG, "CAN 0x111/112 relay_type uygulandi");
+    }
+    return changed;
 }
 
 bool hexnet_io_profile_consume_ui_dirty(void)

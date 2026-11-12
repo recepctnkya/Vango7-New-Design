@@ -7,6 +7,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lcd_touch.h"
@@ -14,6 +16,8 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "lvgl_port.h"
+#include "vango_shot.h"
+#include "display_manager.h"
 
 static const char *TAG = "lv_port";                      // Tag for logging
 static SemaphoreHandle_t lvgl_mux;                       // LVGL mutex for synchronization
@@ -277,6 +281,7 @@ static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t
 
     /* Action after last area refresh */
     if (lv_disp_flush_is_last(drv)) {
+        vango_shot_note_fb(color_map);
         /* Switch the current RGB frame buffer to `color_map` */
         esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
 
@@ -444,6 +449,8 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
         data->point.x = touchpad_x; // Set the X coordinate
         data->point.y = touchpad_y; // Set the Y coordinate
         data->state = LV_INDEV_STATE_PRESSED; // Set state to pressed
+        /* Idle screensaver timer runs only after finger lifts. */
+        hexnet_wallpaper_note_activity();
         ESP_LOGD(TAG, "Touch position: %d,%d", touchpad_x, touchpad_y); // Log touch position
     } else {
         data->state = LV_INDEV_STATE_RELEASED; // Set state to released
@@ -461,6 +468,8 @@ static lv_indev_t *indev_init(esp_lcd_touch_handle_t tp)
     indev_drv_tp.type = LV_INDEV_TYPE_POINTER; // Set the device type to pointer (touchpad)
     indev_drv_tp.read_cb = touchpad_read; // Set the read callback function
     indev_drv_tp.user_data = tp; // Set user data to the touch panel handle
+    indev_drv_tp.scroll_limit = 4;   /* start swipe sooner (default ~10) */
+    indev_drv_tp.scroll_throw = 20;  /* snappier settle after release */
 
     return lv_indev_drv_register(&indev_drv_tp); // Register the input device driver
 }
@@ -533,8 +542,9 @@ esp_err_t lvgl_port_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle
 
     ESP_LOGI(TAG, "Create LVGL task"); // Log task creation
     BaseType_t core_id = (LVGL_PORT_TASK_CORE < 0) ? tskNO_AFFINITY : LVGL_PORT_TASK_CORE; // Determine core ID for the task
-    BaseType_t ret = xTaskCreatePinnedToCore(lvgl_port_task, "lvgl", LVGL_PORT_TASK_STACK_SIZE, NULL,
-                                             LVGL_PORT_TASK_PRIORITY, &lvgl_task_handle, core_id); // Create the LVGL task
+    BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
+        lvgl_port_task, "lvgl", LVGL_PORT_TASK_STACK_SIZE, NULL, LVGL_PORT_TASK_PRIORITY,
+        &lvgl_task_handle, core_id, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create LVGL task"); // Log error if task creation fails
         return ESP_FAIL; // Return failure

@@ -2,6 +2,8 @@ idf_component_register(
 
     SRCS
     "src/hexnet_io_profile.c"
+    "src/hexnet_io_labels.c"
+    "src/hexnet_icon_map.c"
     "src/hexnet_bluetooth.c"
     "src/hexnet_wifi.c"
     "src/hexnet_wifi_portal.c"

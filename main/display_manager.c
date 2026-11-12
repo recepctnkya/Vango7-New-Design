@@ -1,6 +1,10 @@
 // display_manager.c
 
 #include "display_manager.h"
+#include "vango_shot.h"
+#include "ui_vango_dash.h"
+#include "ui_vango_i18n.h"
+#include "ui_vango_theme.h"
 #include "data_manager.h"
 #include "definitions.h"
 #include "ui_files/ui.h"
@@ -8,6 +12,8 @@
 #include "hexnet_nvs.h"
 #include "hexnet_canbus.h"
 #include "hexnet_io_profile.h"
+#include "hexnet_io_labels.h"
+#include "panel_pinout.h"
 #include "esp_mac.h"
 #include "settings_page.h"
 #include "waveshare_rgb_lcd_port.h"
@@ -18,6 +24,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include "esp_timer.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_rgb.h"
@@ -27,6 +34,13 @@
 #include "esp_system.h"
 #include "lvgl.h"
 #include <nvs_flash.h>
+
+void apply_theme_language_from_io(int theme, int language);
+static void push_theme_language_to_io(void);
+static void flush_pending_theme_language_from_io(void);
+static volatile int s_pending_io_theme = -1;
+static volatile int s_pending_io_lang = -1;
+static volatile bool s_pending_io_prefs = false;
 #include "cJson.h"
 
 #include "driver/i2c.h" 
@@ -404,28 +418,40 @@ const char* lblDimBtnNames_TR[8] = {
     "LAMBA", "TUVALET", "MUTFAK", "YATAK OD.", "KORIDOR", "MERDIVEN", "DIS. LAMBA", "SPOT"
 };
 
+const char* lblBtnNames_DE[18] = {
+    "LAMPE", "WC", "KUECHE", "SCHLAFZ.", "FLUR", "STUFE", "KLIMA", "USB", "KUEHL.",
+    "WASSERP.", "STECKD.", "OFEN", "TV", "AUSSENL.", "AUSSENST.", "HEIZUNG", "SPOT", "LESEL."
+};
+const char* lblDimBtnNames_DE[8] = {
+    "LAMPE", "WC", "KUECHE", "SCHLAFZ.", "FLUR", "STUFE", "AUSSENL.", "SPOT"
+};
+
 
 // Example data to save
 int numOfOutputs = 16;
-int numOfDims = 4;
+int numOfDims = 8;
 int numOfSensors = 5;
 float batarya_volt = 0;
 bool slaveConnectionStatus = true;
-int panelThemeType = 0;
+int panelThemeType = 2; /* 0=light lock, 1=dark lock, 2=system (follow IO) */
+int panelAccentIdx = 0; /* tablet accent: 0=vango … 7=green */
 int panelWallpaperEnable = false;
 int panelWallpaperTime = 0;
 int numberOfNotifications = 0;
 cJSON* notifications = NULL;
+/** IO Module SoT effective appearance/lang (0/1). Used when local mode is system. */
+int io_sot_theme = 0;
+int io_sot_language = 0;
 // Declare the global outputsBuffer
 int outputsBuffer[16] = {0};
 int sensorsBuffer[5] = {0};
-int dimsBuffer[4] = {0};
+int dimsBuffer[8] = {0};
 int rgbBuffer[3] = {0};
 int btn_index = 0;
 uint8_t rgbEna = 0; // RGB LED enable variable
 uint8_t fromBleConfig = 0;
 int panelWallpaperEnableCounter = 1;
-int panelLanguageType = 0; // 
+int panelLanguageType = 2; /* 0=EN lock, 1=TR lock, 2=system (follow IO), 3=DE lock */
 int motorData = 0;
 int pnlConnectionLostTimeout = 0;
 int selected_R = 0;
@@ -470,6 +496,9 @@ void example_lvgl_touch_cb(lv_indev_drv_t * drv, lv_indev_data_t * data)
 //###############################   DISPLAY MANAGER FUNCTIONS   ##########################################
 void my_btnThemeWhiteFunc(void)
 {
+    if (!ui_scrMain) {
+        return;
+    }
     panelThemeType = 0;
     lv_obj_set_style_bg_color(ui_scrMain, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(ui_scrTheme, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -540,7 +569,7 @@ void my_btnThemeWhiteFunc(void)
     lv_obj_set_style_text_color(ui_lblDimLevel3, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui_lblDimLevel4, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    for (int i = 0; i < numOfDims; i++) {
+    for (int i = 0; i < numOfDims && i < 4; i++) {
         lv_obj_set_style_text_color(lblDims[i], lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
     }
 
@@ -551,6 +580,9 @@ void my_btnThemeWhiteFunc(void)
 
 void my_btnBlackThemeFunc(void)
 {
+    if (!ui_scrMain) {
+        return;
+    }
     panelThemeType = 1;
     lv_obj_set_style_bg_color(ui_scrMain, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(ui_scrTheme, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -622,7 +654,7 @@ void my_btnBlackThemeFunc(void)
     lv_obj_set_style_text_color(ui_lblDimLevel4, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
 
 
-    for (int i = 0; i < numOfDims; i++) {
+    for (int i = 0; i < numOfDims && i < 4; i++) {
         lv_obj_set_style_text_color(lblDims[i], lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     }
 }
@@ -796,7 +828,7 @@ void create_dynamic_ui(lv_obj_t* parent) {
     }
 
 
-        for (int i = 0; i < numOfDims; i++) {
+        for (int i = 0; i < numOfDims && i < 4; i++) {
         // Create the bar
         sldDims[i] = lv_bar_create(ui_pnlSensors);
         lv_bar_set_value(sldDims[i], 0, LV_ANIM_OFF);
@@ -880,11 +912,14 @@ void create_dynamic_ui(lv_obj_t* parent) {
         lv_obj_add_flag(switches[0], LV_OBJ_FLAG_CLICKABLE);
     }
 
-    if (panelThemeType){
-        my_btnBlackThemeFunc();
-    }
-    else{
-        my_btnThemeWhiteFunc();
+    {
+        const int saved_theme = panelThemeType;
+        if (vango_theme_dark()) {
+            my_btnBlackThemeFunc();
+        } else {
+            my_btnThemeWhiteFunc();
+        }
+        panelThemeType = saved_theme; /* black/white helpers overwrite type */
     }
     apply_theme_settings();
     apply_language_settings();
@@ -958,7 +993,9 @@ void set_RGBTurnONOFF(int val)
         rgbEna = 1;
     }
     else if(val == 0) {
-        lv_obj_set_style_bg_color(ui_btnRGBColor, new_color, LV_PART_MAIN | LV_STATE_DEFAULT);
+        if (ui_btnRGBColor) {
+            lv_obj_set_style_bg_color(ui_btnRGBColor, new_color, LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
         rgbEna = 0;
     }
 }
@@ -976,12 +1013,12 @@ static void init_timer(lv_timer_t * timer) {
 }
 
 static void sendMotorDataPeriodic_timer(lv_timer_t * timer) {
-    // Check if ui_brInit is valid before using it
+    /* Basılı tutma yenilemesi. Dur (0) bırakma anında ui_vango_dash motor_can_send(0) ile gider. */
+    (void)timer;
     if (motorData != 0) {
-        uint8_t can_data[8] = {0}; // CAN verisi için buffer
-        can_data[0] = motorData;  // İlk byte veri
-        send_can_frame(0x750, can_data);  // Motor data için CAN ID   
-        ESP_LOGI(TAG, "Motor Data Sent: %d", motorData);
+        uint8_t can_data[8] = {0};
+        can_data[0] = (uint8_t)motorData;
+        send_can_frame(0x750, can_data);
     }
 }
 
@@ -995,8 +1032,10 @@ static void timer_updateTimer_callback(lv_timer_t * timer) {
     }
     else {
         if (scrMode == 1) {
-            // Check if ui_scrMain is valid before loading it
-            if (ui_scrMain != NULL) {
+            /* Yeni koyu dashboard — legacy ui_scrMain arka planda kalir (IO rebuild) */
+            if (vango_dash_get_screen() != NULL) {
+                vango_dash_show(VANGO_PAGE_HOME);
+            } else if (ui_scrMain != NULL) {
                 lv_scr_load(ui_scrMain);
             }
             scrMode = 0;
@@ -1013,19 +1052,62 @@ static void timer_updateTimer_callback(lv_timer_t * timer) {
 }
 
 
-static void wallpaper_update_timer_callback(lv_timer_t * timer) {
-    if (panelWallpaperEnable) {
-        if (panelWallpaperEnableCounter == panelWallpaperTime) {
-            lv_scr_load(ui_scrWallpaper);
-            panelWallpaperEnableCounter = 0;
+void hexnet_wallpaper_note_activity(void)
+{
+    panelWallpaperEnableCounter = 0;
+}
 
+void hexnet_wallpaper_show(void)
+{
+    /* Legacy ui_init() skipped — create only the screensaver screen. */
+    if (!ui_scrWallpaper) {
+        ui_scrWallpaper_screen_init();
+    }
+    if (!ui_scrWallpaper) {
+        return;
+    }
+    /* No BLE clock → logo; with clock text hide logo (same as legacy). */
+    if (ui_lblScreenClock && ui_imgScreenLogo) {
+        const char *clk = lv_label_get_text(ui_lblScreenClock);
+        if (clk && clk[0]) {
+            lv_obj_clear_flag(ui_lblScreenClock, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(ui_imgScreenLogo, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(ui_lblScreenClock, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(ui_imgScreenLogo, LV_OBJ_FLAG_HIDDEN);
         }
-        panelWallpaperEnableCounter++;
     }
-    else {
+    panelWallpaperEnableCounter = 0;
+    lv_scr_load(ui_scrWallpaper);
+}
+
+void hexnet_wallpaper_dismiss(void)
+{
+    panelWallpaperEnableCounter = 0;
+    if (vango_dash_get_screen() != NULL) {
+        lv_scr_load(vango_dash_get_screen());
+        return;
+    }
+    if (ui_scrMain) {
+        lv_scr_load(ui_scrMain);
+    }
+}
+
+static void wallpaper_update_timer_callback(lv_timer_t * timer) {
+    (void)timer;
+    if (!panelWallpaperEnable || panelWallpaperTime <= 0) {
         panelWallpaperEnableCounter = 0;
+        return;
     }
-    
+    /* Already on screensaver — wait for touch dismiss. */
+    if (ui_scrWallpaper && lv_scr_act() == ui_scrWallpaper) {
+        return;
+    }
+    if (panelWallpaperEnableCounter >= panelWallpaperTime) {
+        hexnet_wallpaper_show();
+        return;
+    }
+    panelWallpaperEnableCounter++;
 }
 
 // Timer callback for communication animation
@@ -1113,6 +1195,15 @@ static bool s_io_profile_ui_rebuild_pending = false;
 static void io_profile_ui_rebuild_timer_cb(lv_timer_t * timer)
 {
     lv_timer_del(timer);
+    hexnet_io_profile_sync_legacy_globals();
+
+    /* Yeni dash aktifken legacy SquareLine rebuild reset/crash riski — atla */
+    if (vango_dash_get_screen() != NULL || !ui_scrMain) {
+        s_io_profile_ui_rebuild_pending = false;
+        ESP_LOGW(TAG, "IO profile sync (dash/legacy skip rebuild): R=%d D=%d",
+                 numOfOutputs, numOfDims);
+        return;
+    }
 
     /* Onceki buton/slider'lari sil (sayi azalinca eski widget kalmasin) */
     for (int i = 0; i < MAX_OUTPUTS; i++) {
@@ -1134,7 +1225,6 @@ static void io_profile_ui_rebuild_timer_cb(lv_timer_t * timer)
         }
     }
 
-    hexnet_io_profile_sync_legacy_globals(); /* NVS + numOfOutputs guncel */
     create_dynamic_ui(ui_scrMain);
     s_io_profile_ui_rebuild_pending = false;
     ESP_LOGW(TAG, "IO profile UI rebuilt (no reset): R=%d D=%d", numOfOutputs, numOfDims);
@@ -1151,7 +1241,63 @@ void update_display_with_data(const uint8_t *data, int length) {
     uint16_t analog_input_5 = get_analog_input(4);
     if (analog_input_1 > 100) analog_input_1 = 0;
     if (analog_input_2 > 100) analog_input_2 = 0;
+    if (analog_input_3 > 100) analog_input_3 = 0;
     batarya_volt = get_voltage() / 100.0;
+
+    /* Eski SquareLine ekranı kurulmadıysa yalnız yeni dashboard güncellenir. */
+    if (!ui_scrMain) {
+        flush_pending_theme_language_from_io();
+        vango_dash_set_battery_v(batarya_volt);
+        {
+            const int th_t = (int)get_sensorTemp();
+            const int th_h = (int)get_sensorHum();
+            const bool th_sample = (th_h >= 0 && th_h <= 100);
+            if (th_sample) {
+                vango_dash_set_temp_c(th_t);
+            }
+            if (get_canbus_connection_status() && th_sample) {
+                vango_dash_set_th(th_t, th_h, true);
+            } else if (get_canbus_connection_status()) {
+                vango_dash_set_th(-1, -1, false);
+            } else {
+                vango_dash_set_th(-1, -1, false);
+            }
+        }
+        if (get_canbus_connection_status()) {
+            vango_dash_set_water((int)get_analog_input(0),
+                                 (int)get_analog_input(1),
+                                 (int)get_analog_input(2));
+        } else {
+            vango_dash_set_water(-1, -1, -1);
+        }
+        {
+            const bool can_up = get_canbus_connection_status() != 0;
+            vango_dash_set_link_status(can_up, get_io_ble_link() != 0, get_io_wifi_link() != 0);
+            vango_dash_set_motor_link(can_up);
+            vango_dash_set_dimmer_link(can_up);
+        }
+        vango_dash_sync_dimmers();
+        vango_dash_sync_relays();
+        /* BLE JSON: throttle — her 250ms cJSON IWDT/heap baskisi yapıyordu. */
+        if (get_connection_status()) {
+            static int64_t s_ble_json_last_us;
+            static uint16_t s_ble_json_out;
+            const uint16_t out_bits = get_outputs();
+            const int64_t now_us = esp_timer_get_time();
+            const bool changed = (out_bits != s_ble_json_out);
+            const bool due = (now_us - s_ble_json_last_us) >= 2000000LL; /* 2s */
+            if (changed || due || s_ble_json_last_us == 0) {
+                char *converted_json_data = NULL;
+                get_data_json_format(regs_data, 0, &converted_json_data);
+                if (converted_json_data) {
+                    set_converted_json_data(converted_json_data);
+                    s_ble_json_last_us = now_us;
+                    s_ble_json_out = out_bits;
+                }
+            }
+        }
+        return;
+    }
     float amper = regs_data[CURRENT_INDIS] / 100.0;
 
     // Convert voltage to string with comma
@@ -1205,8 +1351,16 @@ void update_display_with_data(const uint8_t *data, int length) {
     lv_arc_set_value(ui_arcGrup1, analog_input_1);
     lv_arc_set_value(ui_arcGrup2, analog_input_2);
 
+    /* Yeni dashboard status bar */
+    flush_pending_theme_language_from_io();
 
-    
+    vango_dash_set_battery_v(batarya_volt);
+    vango_dash_set_temp_c(get_sensorTemp());
+    vango_dash_set_water((int)analog_input_1, (int)analog_input_2, 0);
+    {
+        const bool can_up = get_canbus_connection_status() != 0;
+        vango_dash_set_link_status(can_up, get_io_ble_link() != 0, get_io_wifi_link() != 0);
+    }
 
     // Check Modbus connection status and update device image
     //bool Deviceconnected = get_modbus_connection_status();
@@ -1250,7 +1404,10 @@ void update_display_with_data(const uint8_t *data, int length) {
 
     // Ensure create_dynamic_ui is called only once at boot; later profile changes rebuild in-place
     static int ui_initialized = 0;
-    if (hexnet_io_profile_consume_ui_dirty() && ui_initialized >= 3 && !s_io_profile_ui_rebuild_pending) {
+    /* Profile dirty → legacy UI rebuild. Labels dash sync'te debounce edilir
+     * (burst ortasinda consume/NVS/paint CAN kaybettiriyordu). */
+    if (ui_initialized >= 3 && !s_io_profile_ui_rebuild_pending &&
+        hexnet_io_profile_consume_ui_dirty()) {
         s_io_profile_ui_rebuild_pending = true;
         ESP_LOGW(TAG, "IO profile CAN sync: rebuild UI (no reset) relays=%d", numOfOutputs);
         lv_timer_t *rst = lv_timer_create(io_profile_ui_rebuild_timer_cb, 50, NULL);
@@ -1270,16 +1427,16 @@ void update_display_with_data(const uint8_t *data, int length) {
                 set_button_color(btnIO[i], (get_outputs() >> i)&0x01, Deviceconnected);
             }
         }
-        for (int i = 0; i < numOfDims && i < 4; i++) {
+        for (int i = 0; i < numOfDims && i < 8; i++) {
             uint8_t d = get_dimmable_output(i);
             if (d > 100) {
                 d = 0;
             }
-            if (sldDims[i] != NULL) {
+            if (i < 4 && sldDims[i] != NULL) {
                 lv_bar_set_value(sldDims[i], d, LV_ANIM_OFF);
             }
         }
-        /* Dim sayfasi slider'lari CAN ile senkron (platform 0 iken display full kalmasin) */
+        /* Legacy SquareLine dim sayfasi (4 slider) — yeni dash 8 kanali ayri surer */
         lv_obj_t *dimSliders[4] = {ui_slDim1, ui_slDim2, ui_slDim3, ui_slDim4};
         lv_obj_t *dimLevels[4] = {ui_lblDimLevel1, ui_lblDimLevel2, ui_lblDimLevel3, ui_lblDimLevel4};
         for (int i = 0; i < 4; i++) {
@@ -1318,6 +1475,7 @@ char* create_json_data_packet(const uint16_t* regs_data, int numOfOutputs, int n
     cJSON_AddNumberToObject(json, "numOfS", numOfSensors);
     cJSON_AddStringToObject(json, "RGBE", "yes");
     cJSON_AddNumberToObject(json, "Th", themeType);
+    cJSON_AddNumberToObject(json, "Lng", panelLanguageType);
     cJSON_AddNumberToObject(json, "volt", batarya_volt);
 
 
@@ -1757,7 +1915,6 @@ void parse_configuration_data(cJSON* json) {
     cJSON* numOfSensors = cJSON_GetObjectItem(json, "numOfSensors");
     cJSON* sensorsNameBuffer = cJSON_GetObjectItem(json, "SensorsNameBuffer");
     cJSON* rgbEnabled = cJSON_GetObjectItem(json, "RGBEnabled");
-    cJSON* theme = cJSON_GetObjectItem(json, "Theme");
 
     int outputsBuf[16] = {0};
     int dimsBuf[4] = {0};
@@ -1808,8 +1965,49 @@ void parse_configuration_data(cJSON* json) {
     if (rgbEnabled && cJSON_IsString(rgbEnabled)) {
         ESP_LOGI("PARSE_CONFIGURATION_DATA", "RGBEnables: %s", rgbEnabled->valuestring);
     }
-    if (theme && cJSON_IsString(theme)) {
-        ESP_LOGI("PARSE_CONFIGURATION_DATA", "Theme: %s", theme->valuestring);
+
+    /* Theme/language: prefer numeric Th/Lng; string Theme/Language also accepted */
+    {
+        int theme = panelThemeType;
+        int lang = panelLanguageType;
+        bool have = false;
+        cJSON *th = cJSON_GetObjectItem(json, "Th");
+        cJSON *lng = cJSON_GetObjectItem(json, "Lng");
+        cJSON *theme_s = cJSON_GetObjectItem(json, "Theme");
+        cJSON *lang_s = cJSON_GetObjectItem(json, "Language");
+        if (cJSON_IsNumber(th)) {
+            theme = th->valueint;
+            have = true;
+        } else if (cJSON_IsString(theme_s) && theme_s->valuestring) {
+            const char *s = theme_s->valuestring;
+            if (s[0] == 'a' || s[0] == 'A' || s[0] == 's' || s[0] == 'S' || s[0] == '2') {
+                theme = 2; /* auto / system */
+                have = true;
+            } else if (s[0] == 'd' || s[0] == 'D' || s[0] == 'b' || s[0] == 'B' || s[0] == '1') {
+                theme = 1;
+                have = true;
+            } else if (s[0] == 'l' || s[0] == 'L' || s[0] == 'w' || s[0] == 'W' || s[0] == '0') {
+                theme = 0;
+                have = true;
+            }
+        }
+        if (cJSON_IsNumber(lng)) {
+            lang = lng->valueint;
+            have = true;
+        } else if (cJSON_IsString(lang_s) && lang_s->valuestring) {
+            const char *s = lang_s->valuestring;
+            if (s[0] == 'T' || s[0] == 't' || s[0] == '1') {
+                lang = 1;
+                have = true;
+            } else if (s[0] == 'E' || s[0] == 'e' || s[0] == '0') {
+                lang = 0;
+                have = true;
+            }
+        }
+        if (have) {
+            apply_theme_language_from_io(theme, lang);
+            push_theme_language_to_io(); /* mirror to IO SoT when phone talks to Display BLE */
+        }
     }
 
     (void)hexnet_io_profile_apply_json(json, HEXNET_IO_LINK_DISPLAY);
@@ -1864,7 +2062,7 @@ void parse_rules_data(cJSON* json) {
   
 //############################ NVS FUNCTIONS #########################################################################
 // Function to save configuration data to NVS
-void save_panel_configuration_to_nvs(int totalOutps, int buffer1[16], int totalSensors, int buffer2[5], int totalDims, int buffer3[4]) {
+void save_panel_configuration_to_nvs(int totalOutps, int buffer1[16], int totalSensors, int buffer2[5], int totalDims, int buffer3[8]) {
     // Ensure the values do not exceed the maximum allowed sizes
     if (totalOutps > 16) {
         totalOutps = 16;
@@ -1872,17 +2070,17 @@ void save_panel_configuration_to_nvs(int totalOutps, int buffer1[16], int totalS
     if (totalSensors > 5) {
         totalSensors = 5;
     }
-    if (totalDims > 4) {
-        totalDims = 4;
+    if (totalDims > 8) {
+        totalDims = 8;
     }
 
     // Save totalOutps to NVS
     nvs_write_int("numOfOutputs", totalOutps);
 
-    // Save buffer1 to NVS
+    // Save buffer1 to NVS (0 = kanal pasif; 1..18 = tip)
     for (int i = 0; i < 16; i++) {
-        if (buffer1[i] < 1 || buffer1[i] > 18) {
-            buffer1[i] = 1; // Set to default value if out of range
+        if (buffer1[i] < 0 || buffer1[i] > 18) {
+            buffer1[i] = 0;
         }
         char key[16];
         snprintf(key, sizeof(key), "outBuf%d", i);
@@ -1906,7 +2104,7 @@ void save_panel_configuration_to_nvs(int totalOutps, int buffer1[16], int totalS
     nvs_write_int("numDims", totalDims);
 
     // Save buffer3 to NVS
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 8; i++) {
         if (buffer3[i] < 0 || buffer3[i] > 8) {
             buffer3[i] = 0; // Set to default value if out of range
         }
@@ -1922,26 +2120,33 @@ void save_panel_configuration_to_nvs(int totalOutps, int buffer1[16], int totalS
 
 
 void save_theme_configuration_to_nvs(int16_t* themeType, uint16_t* wallpaperEnabled, uint16_t* wallpaperTimeIndex, int16_t* lngType) {
-
-
-    //Save themeType to NVS
-    nvs_write_int("thmTyp", panelThemeType);
-
-    //Save wallpaperEnabled to NVS
-    nvs_write_int("wallpEn", panelWallpaperEnable);
-
-    //Save wallpaperTimeIndex to NVS
-    nvs_write_int("wllTimI", panelWallpaperTime);
-
-    //save languageType to NVS
-    nvs_write_int("lngTyp", panelLanguageType);
-
+    (void)themeType;
+    (void)wallpaperEnabled;
+    (void)wallpaperTimeIndex;
+    (void)lngType;
+    /* Tek open/commit — 5x nvs_write_int flash cache'i 5 kez kilitliyordu (IWDT). */
+    nvs_handle_t h;
+    esp_err_t err = nvs_open("storage", NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "theme NVS open: %s", esp_err_to_name(err));
+        return;
+    }
+    (void)nvs_set_i32(h, "thmTyp", panelThemeType);
+    (void)nvs_set_i32(h, "wallpEn", panelWallpaperEnable);
+    (void)nvs_set_i32(h, "wllTimI", panelWallpaperTime);
+    (void)nvs_set_i32(h, "lngTyp", panelLanguageType);
+    (void)nvs_set_i32(h, "accIdx", panelAccentIdx);
+    err = nvs_commit(h);
+    nvs_close(h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "theme NVS commit: %s", esp_err_to_name(err));
+    }
 }
 
 
 
 // Debug function to print parameters to the screen
-void debug_print_configuration(int totalOutpts, int buffer1[16], int totalSensors, int buffer2[5], int totalDims, int buffer3[4]) {
+void debug_print_configuration(int totalOutpts, int buffer1[16], int totalSensors, int buffer2[5], int totalDims, int buffer3[8]) {
     ESP_LOGI("DEBUG", "totalOutpts: %d", totalOutpts);
     for (int i = 0; i < 16; i++) {
         ESP_LOGI("DEBUG", "buffer1[%d]: %d", i, buffer1[i]);
@@ -1950,14 +2155,14 @@ void debug_print_configuration(int totalOutpts, int buffer1[16], int totalSensor
     for (int i = 0; i < 5; i++) {
         ESP_LOGI("DEBUG", "buffer2[%d]: %d", i, buffer2[i]);
     }
-    ESP_LOGI("DEBUG", "totalDims: %d", totalSensors);
-    for (int i = 0; i < 4; i++) {
+    ESP_LOGI("DEBUG", "totalDims: %d", totalDims);
+    for (int i = 0; i < 8; i++) {
         ESP_LOGI("DEBUG", "buffer3[%d]: %d", i, buffer3[i]);
     }
 }
 
 // Function to read configuration data from NVS
-void load_panel_configuration_from_nvs(int *totalOutpts, int buffer1[16], int *totalSensors, int buffer2[5], int *totalDims, int buffer3[4]) {
+void load_panel_configuration_from_nvs(int *totalOutpts, int buffer1[16], int *totalSensors, int buffer2[5], int *totalDims, int buffer3[8]) {
     // Read totalOutpts from NVS
     if (nvs_read_int("numOfOutputs", totalOutpts) != ESP_OK || *totalOutpts < 0 || *totalOutpts > 16) {
         *totalOutpts = 4; // Set to default value if out of range
@@ -1987,16 +2192,16 @@ void load_panel_configuration_from_nvs(int *totalOutpts, int buffer1[16], int *t
     }
 
     // Read totalSensors from NVS
-    if (nvs_read_int("numDims", totalDims) != ESP_OK || *totalDims < 0 || *totalDims > 4) {
+    if (nvs_read_int("numDims", totalDims) != ESP_OK || *totalDims < 0 || *totalDims > 8) {
         *totalDims = 1; // Set to default value if out of range
     }
 
-    // Read buffer3 from NVS
-    for (int i = 0; i < 4; i++) {
+    // Read buffer3 from NVS. Kanallar 5-8 kayitli degilse kapali kalir.
+    for (int i = 0; i < 8; i++) {
         char key[16];
         snprintf(key, sizeof(key), "dimsBuf%d", i);
-        if (nvs_read_int(key, &buffer3[i]) != ESP_OK || buffer3[i] < 1 || buffer3[i] > 8) {
-            buffer3[i] = 1; // Set to default value if out of range
+        if (nvs_read_int(key, &buffer3[i]) != ESP_OK || buffer3[i] < 0 || buffer3[i] > 8) {
+            buffer3[i] = (i < 4) ? 1 : 0;
         }
     }
 
@@ -2024,8 +2229,8 @@ void load_panel_configuration_from_nvs(int *totalOutpts, int buffer1[16], int *t
 void load_theme_configuration_from_nvs(int* themeType, int* wallpaperEnabled, int* wallpaperTimeIndex, int* panelLanguageType ) {
 
     // Read themeType from NVS
-    if (nvs_read_int("thmTyp", themeType) != ESP_OK || *themeType < 0 || *themeType > 1) {
-        *themeType = 1; // Set to default value if out of range
+    if (nvs_read_int("thmTyp", themeType) != ESP_OK || *themeType < 0 || *themeType > 2) {
+        *themeType = 2; /* default: system (follow IO SoT) */
     }
 
 
@@ -2033,25 +2238,28 @@ void load_theme_configuration_from_nvs(int* themeType, int* wallpaperEnabled, in
     if (nvs_read_int("wallpEn", wallpaperEnabled) != ESP_OK || *wallpaperEnabled < 0 || *wallpaperEnabled > 1) {
         *wallpaperEnabled = 0; // Set to default value if out of range
     }
-    /* Gecici: ekran koruyucu kapali (test) */
-    *wallpaperEnabled = 0;
-    panelWallpaperEnable = 0;
-    (void)nvs_write_int("wallpEn", 0);
 
-    // Read wallpaperEnabled from NVS
+    // Read wallpaper timeout (seconds) from NVS
     if (nvs_read_int("wllTimI", wallpaperTimeIndex) != ESP_OK || *wallpaperTimeIndex < 0 || *wallpaperTimeIndex > 600) {
         *wallpaperTimeIndex = 30; // Set to default value if out of range
     }
 
     // Read wallpaperEnabled from NVS
-    if (nvs_read_int("lngTyp", panelLanguageType) != ESP_OK || *panelLanguageType < 0 || *panelLanguageType > 2) {
-        *panelLanguageType = 0; // Set to default value if out of range
+    if (nvs_read_int("lngTyp", panelLanguageType) != ESP_OK || *panelLanguageType < 0 || *panelLanguageType > 3) {
+        *panelLanguageType = 2; /* default: system (follow IO SoT) */
     }
 
+    {
+        int acc = 0;
+        if (nvs_read_int("accIdx", &acc) != ESP_OK || acc < 0 || acc >= VANGO_ACCENT_N) {
+            acc = 0;
+        }
+        panelAccentIdx = acc;
+    }
 
     // Log the loaded configuration
-    ESP_LOGI(TAG, "Loaded Theme Configuration: Theme=%d, WallpaperEnabled=%d, WallpaperTimeIndex=%d, LanguageType=%d",
-             *themeType, *wallpaperEnabled, *wallpaperTimeIndex, *panelLanguageType);
+    ESP_LOGI(TAG, "Loaded Theme Configuration: Theme=%d, WallpaperEnabled=%d, WallpaperTimeIndex=%d, LanguageType=%d, Accent=%d",
+             *themeType, *wallpaperEnabled, *wallpaperTimeIndex, *panelLanguageType, panelAccentIdx);
 
 }
 
@@ -2089,7 +2297,7 @@ static const int default_values[3] = {0, 1, 2};
 // Function to check switches and get corresponding dropdown values
 void check_switches_and_get_dropdown_values_for_dims() {
     // Reset the outputsBuffer
-    memset(dimsBuffer, 0, sizeof(dimsBuffer));
+    memset(dimsBuffer, 0, 4 * sizeof(dimsBuffer[0]));
 
     numOfDims = 0; // Initialize numOfOutputs
     // Apply numOfOutputs and outputsBuffer to swO1-swO16 and cbxO1-cbxO16
@@ -2302,13 +2510,172 @@ void save_theme_settings()
     
     ESP_LOGI(TAG, "Wallpaper Enabled, Selected Time: %s-----index = %d panelThemeType =%d panelWallpaperEnable =%d panelWallpaperTime =%d panelLanguageType =%d", selected_text, selected_index,
              panelThemeType, panelWallpaperEnable, panelWallpaperTime, panelLanguageType);
-    save_theme_configuration_to_nvs((int16_t*)&panelThemeType, (uint16_t*)&panelWallpaperEnable, (uint16_t*)&panelWallpaperTime, (int16_t*)&panelLanguageType);
+    persist_theme_settings();
+}
+
+/*
+ * NVS asla LVGL / esp_timer callback'inden yazilmamali
+ * (S3: spi_flash cache assert / Interrupt WDT → reset).
+ * Tema/accent seciminde UI "reset" gibi gorunuyordu.
+ */
+static QueueHandle_t s_theme_nvs_q;
+static TaskHandle_t s_theme_nvs_task;
+
+static void theme_nvs_task(void *arg)
+{
+    (void)arg;
+    uint32_t token;
+    for (;;) {
+        if (xQueueReceive(s_theme_nvs_q, &token, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        vTaskDelay(pdMS_TO_TICKS(80));
+        while (xQueueReceive(s_theme_nvs_q, &token, 0) == pdTRUE) {
+            /* coalesce */
+        }
+        save_theme_configuration_to_nvs((int16_t *)&panelThemeType,
+                                        (uint16_t *)&panelWallpaperEnable,
+                                        (uint16_t *)&panelWallpaperTime,
+                                        (int16_t *)&panelLanguageType);
+        ESP_LOGI(TAG, "Persisted theme/lang (task): theme=%d lang=%d wall=%d time=%d acc=%d",
+                 panelThemeType, panelLanguageType, panelWallpaperEnable, panelWallpaperTime,
+                 panelAccentIdx);
+    }
+}
+
+void persist_theme_settings(void)
+{
+    if (!s_theme_nvs_q) {
+        s_theme_nvs_q = xQueueCreate(1, sizeof(uint32_t));
+    }
+    if (!s_theme_nvs_task && s_theme_nvs_q) {
+        BaseType_t ok = xTaskCreate(theme_nvs_task, "theme_nvs", 3072, NULL, 3, &s_theme_nvs_task);
+        if (ok != pdPASS) {
+            s_theme_nvs_task = NULL;
+            ESP_LOGE(TAG, "theme NVS task create failed — sync fallback");
+            save_theme_configuration_to_nvs((int16_t *)&panelThemeType,
+                                            (uint16_t *)&panelWallpaperEnable,
+                                            (uint16_t *)&panelWallpaperTime,
+                                            (int16_t *)&panelLanguageType);
+            return;
+        }
+    }
+    if (s_theme_nvs_q) {
+        uint32_t token = 1;
+        (void)xQueueOverwrite(s_theme_nvs_q, &token);
+    }
+}
+
+void sync_theme_widgets_from_globals(void)
+{
+    /* Dropdown options: "TURKCE\\nENGLISH" → index 0=TR, 1=EN */
+    if (ui_dbLanguage) {
+        lv_dropdown_set_selected(ui_dbLanguage, panelLanguageType == 1 ? 0 : 1);
+    }
+    apply_theme_settings();
+}
+
+static void push_theme_language_to_io(void)
+{
+    /* Only manual locks write IO SoT. 0xFF = no change for that field. */
+    uint8_t can_data[8] = {0};
+    const int push_th = (panelThemeType == 0 || panelThemeType == 1);
+    const int push_lng = (panelLanguageType == 0 || panelLanguageType == 1);
+    if (!push_th && !push_lng) {
+        ESP_LOGI(TAG, "Skip 0x760 — theme/lang both system (follow IO)");
+        return;
+    }
+    can_data[0] = push_th ? (uint8_t)panelThemeType : 0xFFu;
+    can_data[1] = push_lng ? (uint8_t)panelLanguageType : 0xFFu;
+    if (push_th) {
+        io_sot_theme = panelThemeType;
+    }
+    if (push_lng) {
+        io_sot_language = panelLanguageType;
+    }
+    ESP_LOGI(TAG, "TX 0x760 theme/lang Th=%d Lng=%d (mode Th=%d Lng=%d)",
+             (int)can_data[0], (int)can_data[1], panelThemeType, panelLanguageType);
+    send_can_frame(VANGO_CAN_FRAME_THEME_LANG, can_data);
+}
+
+/** Apply legacy screen colors without clobbering panelThemeType (esp. system=2). */
+static void apply_legacy_theme_visual(void)
+{
+    const int saved = panelThemeType;
+    if (vango_theme_dark()) {
+        my_btnBlackThemeFunc();
+    } else {
+        my_btnThemeWhiteFunc();
+    }
+    panelThemeType = saved;
+}
+
+void commit_theme_language_settings(void)
+{
+    sync_theme_widgets_from_globals();
+    apply_legacy_theme_visual();
+    apply_language_settings();
+    persist_theme_settings();
+    push_theme_language_to_io();
+}
+
+void apply_theme_language_from_io(int theme, int language)
+{
+    /* CAN RX — update IO SoT cache; apply UI only when local mode is system */
+    bool sot_changed = false;
+    if (theme == 0 || theme == 1) {
+        if (io_sot_theme != theme) {
+            io_sot_theme = theme;
+            sot_changed = true;
+        }
+    }
+    if (language == 0 || language == 1) {
+        if (io_sot_language != language) {
+            io_sot_language = language;
+            sot_changed = true;
+        }
+    }
+
+    const bool apply_th = (panelThemeType == 2);
+    const bool apply_lng = (panelLanguageType == 2);
+    if (!apply_th && !apply_lng) {
+        if (sot_changed) {
+            ESP_LOGI(TAG, "IO SoT updated Th=%d Lng=%d (local locked — UI unchanged)",
+                     io_sot_theme, io_sot_language);
+        }
+        return;
+    }
+    if (!sot_changed && !s_pending_io_prefs) {
+        return;
+    }
+    s_pending_io_theme = io_sot_theme;
+    s_pending_io_lang = io_sot_language;
+    s_pending_io_prefs = true;
+    ESP_LOGI(TAG, "Theme/lang queued from IO SoT: Th=%d Lng=%d (local system mode)",
+             io_sot_theme, io_sot_language);
+}
+
+static void flush_pending_theme_language_from_io(void)
+{
+    if (!s_pending_io_prefs) {
+        return;
+    }
+    s_pending_io_prefs = false;
+    /* Modes stay system(2) or locked — only visuals/strings follow SoT */
+    apply_legacy_theme_visual();
+    sync_theme_widgets_from_globals();
+    apply_language_settings();
+    ESP_LOGI(TAG, "Theme/lang UI applied from IO SoT: eff Th=%d Lng=%d (mode Th=%d Lng=%d)",
+             io_sot_theme, io_sot_language, panelThemeType, panelLanguageType);
 }
 
 
 void apply_theme_settings()
 {
-    // Apply theme enabled status to the switch
+    if (!ui_swEnableWallpaper || !ui_rlrTime) {
+        return;
+    }
+
     // Apply theme enabled status to the switch
     if (panelWallpaperEnable) {
         lv_obj_add_state(ui_swEnableWallpaper, LV_STATE_CHECKED);
@@ -2344,11 +2711,13 @@ void apply_theme_settings()
 
 void apply_language_settings()
 {
-    //if 
-    // Apply language settings based on panelLanguage
-    if (panelLanguageType == 0) {
-        // English
-
+    if (!ui_scrMain) {
+        vango_dash_on_prefs_changed();
+        return;
+    }
+    /* Effective lang: 0=EN, 1=TR, 3=DE (system follows IO SoT). */
+    const int lang = vango_lang();
+    if (lang == 0) {
         lv_label_set_text(ui_lblPanelSettingsB, "PANEL\nSETTINGS");
         lv_label_set_text(ui_lblThemeSettingsB, "THEME\nSETTINGS");
         lv_label_set_text(ui_lblConnectionSettingsB, "CONNECTION\nSETTINGS");
@@ -2378,21 +2747,15 @@ void apply_language_settings()
         lv_label_set_text(ui_lblUnderArcWater1, "Clean Water");
         lv_label_set_text(ui_lblUnderArcWater2, "Dirty Water");
 
-        //set lblBtnNames_TR with for loop that has numberofOutputs
         for (int i = 0; i < numOfOutputs; i++) {
             lv_label_set_text(lblIO[i], lblBtnNames[outputsBuffer[i] - 1]);
         }
-
-        //do it for dims as well
-        for (int i = 0; i < numOfDims; i++) {
+        for (int i = 0; i < numOfDims && i < 4; i++) {
             lv_label_set_text(lblDims[i], lblDimBtnNames[dimsBuffer[i] - 1]);
         }
-
         set_language_for_dropdowns();
 
-    } else if (panelLanguageType == 1) {
-        // Turkish
-
+    } else if (lang == 1) {
         lv_label_set_text(ui_lblPanelSettingsB, "PANEL\nAYARLARI");
         lv_label_set_text(ui_lblThemeSettingsB, "TEMA\nAYARLARI");
         lv_label_set_text(ui_lblConnectionSettingsB, "BAGLANTI\nAYARLARI");
@@ -2422,19 +2785,51 @@ void apply_language_settings()
         lv_label_set_text(ui_lblUnderArcWater1, "Temiz Su");
         lv_label_set_text(ui_lblUnderArcWater2, "Kirli Su");
 
-
-
-
-        //set lblBtnNames_TR with for loop that has numberofOutputs
         for (int i = 0; i < numOfOutputs; i++) {
             lv_label_set_text(lblIO[i], lblBtnNames_TR[outputsBuffer[i] - 1]);
         }
-
-        //do it for dims as well
-        for (int i = 0; i < numOfDims; i++) {
+        for (int i = 0; i < numOfDims && i < 4; i++) {
             lv_label_set_text(lblDims[i], lblDimBtnNames_TR[dimsBuffer[i] - 1]);
         }
         set_language_for_dropdowns_TR();
+
+    } else if (lang == 3) {
+        lv_label_set_text(ui_lblPanelSettingsB, "PANEL\nEINSTELL.");
+        lv_label_set_text(ui_lblThemeSettingsB, "THEMA\nEINSTELL.");
+        lv_label_set_text(ui_lblConnectionSettingsB, "VERBINDUNG\nEINSTELL.");
+        lv_label_set_text(ui_lblDimmableOutputsB, "DIM\nAUSGAENGE");
+        lv_label_set_text(ui_lblSensorsB, "SENSOREN");
+        lv_label_set_text(ui_lblWaterLevelsB, "WASSER\nSTAND");
+        lv_label_set_text(ui_lblLock6, "Zurueck");
+        lv_label_set_text(ui_lblLock5, "Zurueck");
+        lv_label_set_text(ui_Label2, "Anwenden");
+        lv_label_set_text(ui_lblLock2, "Zurueck");
+        lv_label_set_text(ui_lblLock4, "Zurueck");
+        lv_label_set_text(ui_lblLock8, "Zurueck");
+        lv_label_set_text(ui_lblLock3, "Zurueck");
+        lv_label_set_text(ui_lblSettings2, "Speichern");
+        lv_label_set_text(ui_lblLock3, "Speichern");
+        lv_label_set_text(ui_lblSelectTheme, "Thema: ");
+        lv_label_set_text(ui_lblWallpaper, "Bildschirm: ");
+        lv_label_set_text(ui_lblGrup1, "Frischwasser");
+        lv_label_set_text(ui_lblGrup2, "Abwasser");
+        lv_label_set_text(ui_lblPnlGrup1Sicaklik1, "\nTemperatur");
+        lv_label_set_text(ui_lblPnlGrup1Sicaklik2, "\nFeuchte");
+        lv_label_set_text(ui_Label12, "EINSTELLUNGEN WERDEN\nGESPEICHERT... NEUSTART");
+        lv_label_set_text(ui_lblPanelSettings, "PANEL EINSTELLUNGEN");
+        lv_label_set_text(ui_lblDimmableOutputs, "Dim-Ausgaenge");
+        lv_label_set_text(ui_lblUnderArcTemperature1, "Temperatur");
+        lv_label_set_text(ui_lblUnderArcTemperature2, "Feuchte");
+        lv_label_set_text(ui_lblUnderArcWater1, "Frischwasser");
+        lv_label_set_text(ui_lblUnderArcWater2, "Abwasser");
+
+        for (int i = 0; i < numOfOutputs; i++) {
+            lv_label_set_text(lblIO[i], lblBtnNames_DE[outputsBuffer[i] - 1]);
+        }
+        for (int i = 0; i < numOfDims && i < 4; i++) {
+            lv_label_set_text(lblDims[i], lblDimBtnNames_DE[dimsBuffer[i] - 1]);
+        }
+        set_language_for_dropdowns();
     }
 
 
@@ -2446,7 +2841,7 @@ void apply_language_settings()
         ESP_LOGI("LANGUAGE_APPLY", "Dropdown %d set to index %d", i + 1, outputsBuffer[i] - 1);
     }
 
-    for(int i = 0; i < numOfDims; i++) {
+    for(int i = 0; i < numOfDims && i < 4; i++) {
         lv_dropdown_set_selected(dimdropdowns[i], dimsBuffer[i] - 1); // Set the dropdown value
         ESP_LOGI("LANGUAGE_APPLY", "Dim Dropdown %d set to index %d", i + 1, dimsBuffer[i] - 1);
     }
@@ -2455,6 +2850,9 @@ void apply_language_settings()
         lv_dropdown_set_selected(ui_cbRSelect, selected_R);
         lv_dropdown_set_selected(ui_cbGSelect, selected_G);
         lv_dropdown_set_selected(ui_cbBSelect, selected_B);
+
+    /* Keep dash Settings / nav in sync with panel language */
+    vango_dash_on_prefs_changed();
 }
 
 
@@ -2721,13 +3119,13 @@ void display_manager_init() {
      wavesahre_rgb_lcd_bl_on();  //Turn on the screen backlight 
     // wavesahre_rgb_lcd_bl_off(); //Turn off the screen backlight 
     
-    lv_timer_t * updateScreentimer = lv_timer_create(timer_updateTimer_callback, 150, NULL);
+    lv_timer_t * updateScreentimer = lv_timer_create(timer_updateTimer_callback, 250, NULL);
     lv_timer_t * wallpaperTimer = lv_timer_create(wallpaper_update_timer_callback, 1000, NULL);
-    lv_timer_t * initTim = lv_timer_create(init_timer, 100, NULL);
+    (void)updateScreentimer;
+    (void)wallpaperTimer;
     lv_timer_t * sendMotorDataTimer = lv_timer_create(sendMotorDataPeriodic_timer, 200, NULL);
- 
-    // Create communication animation timer (1 second interval)
-    comm_animation_timer = lv_timer_create(comm_animation_timer_callback, 1000, NULL);
+    (void)sendMotorDataTimer;
+    /* Eski iletişim animasyonu ui_Panel9'a dokunur; o ekran kurulmuyor. */
 
      hexnet_io_profile_sync_legacy_globals();
     sensorsBuffer[0] = 1;//temperature 1
@@ -2750,7 +3148,7 @@ void display_manager_init() {
         ESP_LOGW(TAG, "sensorsBuffer[%d]: %d", i, sensorsBuffer[i]);
     }
     ESP_LOGW(TAG, "numOfDims: %d", numOfDims);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 8; i++) {
         ESP_LOGW(TAG, "dimsBuffer[%d]: %d", i, dimsBuffer[i]);
     }
     ESP_LOGW(TAG, "panelThemeType: %d", panelThemeType);
@@ -2760,16 +3158,23 @@ void display_manager_init() {
    
 
 
-    ESP_LOGI(TAG, "Display LVGL Scatter Chart");
-    // Lock the mutex due to the LVGL APIs are not thread-safe
+    ESP_LOGI(TAG, "Legacy SquareLine UI init skipped");
+    /* ui_init() / ui_scrInit / panel settings ekranı bilinçli olarak kurulmuyor.
+       Kaynak dosyalar duruyor; çalışan arayüz vango_dash. */
+}
+
+void display_manager_start_dash(void)
+{
+    vango_shot_start();
     if (lvgl_port_lock(-1)) {
-        ui_init();
-        lv_scr_load(ui_scrInit);
-        ui_scrPanelSettings_IO_Dim_init();
-        
-    // Initialize dim widgets visibility after UI is created
-    initialize_dim_widgets_visibility();
-    
-    lvgl_port_unlock();
+        if (vango_dash_get_screen() == NULL) {
+            vango_dash_init();
+            ESP_LOGI(TAG, "VANGO dash started after radio init");
+        }
+        vango_dash_show(VANGO_PAGE_HOME);
+        lvgl_port_unlock();
     }
+    vango_shot_set_ready();
+    /* BLE advertise only after dash — prevents connect-time DRAM OOM reset loop */
+    ble_start_advertising();
 }

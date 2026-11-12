@@ -4,6 +4,7 @@
 // Project name: SquareLine_Project
 
 #include "ui.h"
+#include "ui_vango_dash.h"
 
 lv_obj_t * ui_scrPanelSettings = NULL;
 lv_obj_t * ui_Panel10 = NULL;
@@ -21,7 +22,11 @@ void ui_event_Button5(lv_event_t * e)
     lv_event_code_t event_code = lv_event_get_code(e);
 
     if(event_code == LV_EVENT_CLICKED) {
-        _ui_screen_change(&ui_scrSettings, LV_SCR_LOAD_ANIM_NONE, 0, 0, &ui_scrSettings_screen_init);
+        if (vango_dash_consume_return_from_legacy()) {
+            vango_dash_show(VANGO_PAGE_SETTINGS);
+        } else {
+            _ui_screen_change(&ui_scrSettings, LV_SCR_LOAD_ANIM_NONE, 0, 0, &ui_scrSettings_screen_init);
+        }
     }
 }
 

@@ -51,7 +51,9 @@ void app_main()
 
     hexnet_io_profile_init();
     display_manager_init(); // Display manager'ı başlat
-    /* Wi-Fi once BLE'den once: internal DRAM yetersizliginde Wi-Fi NO_MEM boot-loop olmasin */
+    /* Wi-Fi display'de kapali; hexnet_wifi_init() no-op. */
     hexnet_wifi_init();
     ble_init();
+    /* Dash BLE'den sonra: controller EMI buffer icin internal DRAM ihtiyac duyar */
+    display_manager_start_dash();
 }

@@ -4,6 +4,10 @@
 // Project name: SquareLine_Project
 
 #include "ui.h"
+#include "vango_icons.h"
+
+/* Implemented in display_manager.c — returns to VANGO dash when present. */
+void hexnet_wallpaper_dismiss(void);
 
 lv_obj_t * ui_scrWallpaper = NULL;
 lv_obj_t * ui_lblScreenClock = NULL;
@@ -15,7 +19,7 @@ void ui_event_Container2(lv_event_t * e)
     lv_event_code_t event_code = lv_event_get_code(e);
 
     if(event_code == LV_EVENT_CLICKED) {
-        _ui_screen_change(&ui_scrMain, LV_SCR_LOAD_ANIM_NONE, 0, 0, &ui_scrMain_screen_init);
+        hexnet_wallpaper_dismiss();
     }
 }
 
@@ -48,16 +52,15 @@ void ui_scrWallpaper_screen_init(void)
     lv_obj_set_align(ui_Container2, LV_ALIGN_CENTER);
     lv_obj_clear_flag(ui_Container2, LV_OBJ_FLAG_SCROLLABLE);      /// Flags
 
+    /* Native 256×256 from Hexnet_logo_0 — no LVGL zoom (was jagged at zoom 220). */
     ui_imgScreenLogo = lv_img_create(ui_scrWallpaper);
-    lv_img_set_src(ui_imgScreenLogo, &ui_img_wallpaperlogo_png);
-    lv_obj_set_width(ui_imgScreenLogo, LV_SIZE_CONTENT);   /// 1
-    lv_obj_set_height(ui_imgScreenLogo, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_imgScreenLogo, -4);
-    lv_obj_set_y(ui_imgScreenLogo, -31);
-    lv_obj_set_align(ui_imgScreenLogo, LV_ALIGN_CENTER);
-    lv_obj_add_flag(ui_imgScreenLogo, LV_OBJ_FLAG_ADV_HITTEST);     /// Flags
-    lv_obj_clear_flag(ui_imgScreenLogo, LV_OBJ_FLAG_SCROLLABLE);      /// Flags
-    lv_img_set_zoom(ui_imgScreenLogo, 220);
+    lv_img_set_src(ui_imgScreenLogo, &vango_wallpaper_logo);
+    lv_obj_set_width(ui_imgScreenLogo, LV_SIZE_CONTENT);
+    lv_obj_set_height(ui_imgScreenLogo, LV_SIZE_CONTENT);
+    lv_obj_align(ui_imgScreenLogo, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(ui_imgScreenLogo, LV_OBJ_FLAG_ADV_HITTEST);
+    lv_obj_clear_flag(ui_imgScreenLogo, LV_OBJ_FLAG_SCROLLABLE);
+    lv_img_set_zoom(ui_imgScreenLogo, 256);
 
     lv_obj_add_event_cb(ui_Container2, ui_event_Container2, LV_EVENT_ALL, NULL);
 

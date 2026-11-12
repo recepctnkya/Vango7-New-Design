@@ -311,6 +311,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
 void hexnet_wifi_init(void)
 {
+    /* Display internete cikmaz; bulut IO module uzerinden. STA yeniden
+       baglanma internal DRAM'de ESP_ERR_NO_MEM ile boot-loop yapiyordu. */
+    ESP_LOGW(TAG, "Wi-Fi kapali (display)");
+    return;
+
     ESP_ERROR_CHECK(esp_netif_init());
     esp_err_t loop_ret = esp_event_loop_create_default();
     if (loop_ret != ESP_OK && loop_ret != ESP_ERR_INVALID_STATE) {

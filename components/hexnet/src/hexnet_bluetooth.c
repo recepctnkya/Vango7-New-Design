@@ -5,6 +5,8 @@
  */
 
 #include "hexnet_bluetooth.h"
+#include "esp_heap_caps.h"
+#include "freertos/idf_additions.h"
 
 
 static const uint8_t spp_adv_data[] = {
@@ -41,10 +43,20 @@ static uint8_t heartbeat_count_num = 0;
 
 static bool enable_data_ntf = false;
 static bool is_connected = false;
+/* Dash + LVGL bitmeden advertise etme: BLE connect + config_save thread
+ * internal DRAM yetmezse osi_thread_create → vQueueDelete assert → reset döngüsü. */
+static bool s_adv_allowed = false;
+static bool s_adv_data_ready = false;
 static esp_bd_addr_t spp_remote_bda = {0x0,};
+static TimerHandle_t s_periodic_timer = NULL;
 
 // MTU negotiation state tracking
 static bool mtu_negotiation_pending = false;
+
+static bool ble_status_tx_ready(void)
+{
+    return is_connected && enable_data_ntf && spp_mtu_size >= 100 && converted_json_data2 != NULL;
+}
 
 static uint16_t spp_handle_table[SPP_IDX_NB];
 
@@ -361,40 +373,48 @@ void data_transmit_task(void *arg)
     
     for(;;) {
         if(xQueueReceive(data_transmit_queue, &data_to_send, portMAX_DELAY)) {
-            if (data_to_send != NULL && is_connected) {
-                int data_len = strlen(data_to_send);
-                int max_payload = spp_mtu_size - 3; // Account for GATT protocol overhead
-                
-                //ESP_LOGI(GATTS_TABLE_TAG, "Sending JSON data, length: %d, MTU: %d", data_len, spp_mtu_size);
-                
-                if (data_len <= max_payload) {
-                    // Data fits in single packet
-                    esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, spp_handle_table[SPP_IDX_SPP_DATA_NTY_VAL],
-                                                data_len, (uint8_t *)data_to_send, false);
-                } else {
-                    // // Send first chunk only to avoid stack overflow
-                    // ESP_LOGW(GATTS_TABLE_TAG, "Data too large (%d bytes), sending first %d bytes", data_len, max_payload);
-                    // esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, spp_handle_table[SPP_IDX_SPP_DATA_NTY_VAL],
-                    //                             max_payload, (uint8_t *)data_to_send, false);
-                }
-                
-                // Note: We don't free data_to_send here since it's the original converted_json_data2 pointer
-                // The memory is managed by the caller (display_manager)
+            if (data_to_send == NULL || !ble_status_tx_ready()) {
+                continue;
             }
+            int data_len = (int)strlen(data_to_send);
+            int max_payload = (int)spp_mtu_size - 3; /* GATT overhead */
+            int offset = 0;
+
+            if (max_payload < 20) {
+                max_payload = 20;
+            }
+
+            while (offset < data_len && ble_status_tx_ready()) {
+                int chunk = data_len - offset;
+                if (chunk > max_payload) {
+                    chunk = max_payload;
+                }
+                esp_err_t err = esp_ble_gatts_send_indicate(
+                    spp_gatts_if, spp_conn_id, spp_handle_table[SPP_IDX_SPP_DATA_NTY_VAL],
+                    chunk, (uint8_t *)data_to_send + offset, false);
+                if (err != ESP_OK) {
+                    ESP_LOGW(GATTS_TABLE_TAG, "indicate fail off=%d err=%s", offset,
+                             esp_err_to_name(err));
+                    break;
+                }
+                offset += chunk;
+                if (offset < data_len) {
+                    vTaskDelay(pdMS_TO_TICKS(15));
+                }
+            }
+            /* pointer = converted_json_data2; free display_manager'da */
         }
     }
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 void bluetooth_send_periodic_callback(TimerHandle_t xTimer)
 {
-    static int counter = 0;
-    
-    // Send data if connected and data is available - minimal operations only
-    if (is_connected && converted_json_data2 != NULL) {
-        char *data_ptr = converted_json_data2;
-        xQueueSend(data_transmit_queue, &data_ptr, 0); // Non-blocking send
-        counter++;
+    (void)xTimer;
+    if (!ble_status_tx_ready()) {
+        return;
     }
+    char *data_ptr = converted_json_data2;
+    xQueueSend(data_transmit_queue, &data_ptr, 0);
 }
 
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
@@ -404,14 +424,20 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 
     switch (event) {
     case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT:
-        esp_ble_gap_start_advertising(&spp_adv_params);
+        s_adv_data_ready = true;
+        if (s_adv_allowed) {
+            esp_ble_gap_start_advertising(&spp_adv_params);
+        } else {
+            ESP_LOGW(GATTS_TABLE_TAG, "adv data ready — waiting for dash before advertise");
+        }
         break;
     case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
         //advertising start complete event to indicate advertising start successfully or failed
         if((err = param->adv_start_cmpl.status) != ESP_BT_STATUS_SUCCESS) {
             ESP_LOGE(GATTS_TABLE_TAG, "Advertising start failed: %s", esp_err_to_name(err));
         } else {
-            ESP_LOGI(GATTS_TABLE_TAG, "Advertising started successfully");
+            ESP_LOGI(GATTS_TABLE_TAG, "Advertising started successfully (internal free=%u)",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         }
         break;
     // Note: ESP_GAP_BLE_CONN_PARAMS_UPD_EVT and ESP_GAP_BLE_CONN_PARAMS_UPD_FAIL_EVT 
@@ -510,6 +536,14 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
     	    spp_mtu_size = p_data->mtu.mtu;
     	    mtu_negotiation_pending = false; // MTU negotiation completed
     	    ESP_LOGI(GATTS_TABLE_TAG, "MTU size updated to: %d", spp_mtu_size);
+            /* MTU hazir + notify aciksa periyodik status baslat (connect aninda degil) */
+            if (s_periodic_timer == NULL && is_connected) {
+                s_periodic_timer = xTimerCreate("PeriodicTimer", pdMS_TO_TICKS(1000), pdTRUE,
+                                                (void *)0, bluetooth_send_periodic_callback);
+                if (s_periodic_timer && xTimerStart(s_periodic_timer, 0) != pdPASS) {
+                    ESP_LOGE(GATTS_TABLE_TAG, "Failed to start status timer");
+                }
+            }
     	    break;
     	case ESP_GATTS_CONF_EVT:
     	    break;
@@ -543,18 +577,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             conn_params.latency = 0;       // No latency
             conn_params.timeout = 400;     // 4 seconds
             esp_ble_gap_update_conn_params(&conn_params);
-
-            // Create a FreeRTOS timer for periodic data transmission
-            TimerHandle_t periodic_timer = xTimerCreate("PeriodicTimer", pdMS_TO_TICKS(500), pdTRUE, (void *)0, bluetooth_send_periodic_callback);
-
-            if (periodic_timer == NULL) {
-                ESP_LOGE(GATTS_TABLE_TAG, "Failed to create timer");
-            } else {
-                // Start the timer with a block time of 0 (start immediately)
-                if (xTimerStart(periodic_timer, 0) != pdPASS) {
-                    ESP_LOGE(GATTS_TABLE_TAG, "Failed to start timer");
-                }
-            }
+            /* Status TX: MTU_EVT'te baslar — connect aninda MTU=23 flood IWDT yapiyordu */
 
     	    memcpy(&spp_remote_bda,&p_data->connect.remote_bda,sizeof(esp_bd_addr_t));
 #ifdef SUPPORT_HEARTBEAT
@@ -568,11 +591,18 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             mtu_negotiation_pending = false; // Reset MTU negotiation state
     	    is_connected = false;
     	    enable_data_ntf = false;
+            if (s_periodic_timer) {
+                xTimerStop(s_periodic_timer, 0);
+                xTimerDelete(s_periodic_timer, 0);
+                s_periodic_timer = NULL;
+            }
 #ifdef SUPPORT_HEARTBEAT
     	    enable_heart_ntf = false;
     	    heartbeat_count_num = 0;
 #endif
-    	    esp_ble_gap_start_advertising(&spp_adv_params);
+    	    if (s_adv_allowed) {
+    	        esp_ble_gap_start_advertising(&spp_adv_params);
+    	    }
     	    break;
     	case ESP_GATTS_OPEN_EVT:
     	    break;
@@ -686,15 +716,31 @@ void ble_init(void)
         return;
     }
 
-    // Create data transmission task
-    xTaskCreate(data_transmit_task, "data_transmit", 4096, NULL, 5, NULL);
+    /* Stack SPIRAM — internal DRAM BLE controller / connect icin kalsin */
+    xTaskCreateWithCaps(data_transmit_task, "data_transmit", 3072, NULL, 5, NULL,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     esp_err_t local_mtu_ret = esp_ble_gatt_set_local_mtu(500);
     if (local_mtu_ret){
         ESP_LOGE(GATTS_TABLE_TAG, "set local  MTU failed, error code = %x", local_mtu_ret);
     }
 
+    ESP_LOGI(GATTS_TABLE_TAG, "ble_init done internal free=%u (advertise deferred)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     return;
+}
+
+void ble_start_advertising(void)
+{
+    s_adv_allowed = true;
+    ESP_LOGI(GATTS_TABLE_TAG, "ble_start_advertising allow internal free=%u ready=%d",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (int)s_adv_data_ready);
+    if (s_adv_data_ready) {
+        esp_err_t err = esp_ble_gap_start_advertising(&spp_adv_params);
+        if (err != ESP_OK) {
+            ESP_LOGE(GATTS_TABLE_TAG, "start advertising failed: %s", esp_err_to_name(err));
+        }
+    }
 }
 
 // Function to get the connection status

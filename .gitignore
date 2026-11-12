@@ -1,3 +1,18 @@
 # Ignored Files added by the user
 /build/
 dependencies.lock
+/sdkconfig
+/sdkconfig.old
+/.vscode/settings.json
+
+# Local build and test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+/flash_err.txt
+/flash_out.txt
+/py_check.txt
+/tools/*.png
+/tools/*.log
+/tools/*.txt
+/tools/*.bin

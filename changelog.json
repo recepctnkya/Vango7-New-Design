@@ -1,0 +1,64 @@
+[
+    {
+        "version":  "v0.50-0005",
+        "module":  "platform",
+        "date":  "2026-11-10",
+        "changes":  [
+                        "Bump micro : v0.50-0004 -\u003e v0.50-0005",
+                        "auto: source changed"
+                    ]
+    },
+    {
+        "value":  [
+                      {
+                          "version":  "v0.50-0004",
+                          "module":  "platform",
+                          "date":  "2026-11-10",
+                          "changes":  [
+                                          "Bump micro : v0.50-0003 -\u003e v0.50-0004",
+                                          "auto: source changed"
+                                      ]
+                      },
+                      {
+                          "value":  [
+                                        {
+                                            "version":  "v0.50-0003",
+                                            "module":  "platform",
+                                            "date":  "2026-11-10",
+                                            "changes":  [
+                                                            "Bump micro : v0.50-0002 -\u003e v0.50-0003",
+                                                            "auto: source changed"
+                                                        ]
+                                        },
+                                        {
+                                            "value":  [
+                                                          {
+                                                              "version":  "v0.50-0002",
+                                                              "module":  "platform",
+                                                              "date":  "2026-11-09",
+                                                              "changes":  [
+                                                                              "Bump micro : v0.50-0001 -\u003e v0.50-0002",
+                                                                              "auto: source changed"
+                                                                          ]
+                                                          },
+                                                          {
+                                                              "value":  [
+                                                                            {
+                                                                                "version":  "v0.50-0001",
+                                                                                "module":  "platform",
+                                                                                "date":  "2026-11-07",
+                                                                                "changes":  "Makro/mikro sürüm yönetimi eklendi (VERSION.json + changelog + Sync/Bump) Sağ üst IO/BLE/WiFi link göstergeleri"
+                                                                            }
+                                                                        ],
+                                                              "Count":  1
+                                                          }
+                                                      ],
+                                            "Count":  2
+                                        }
+                                    ],
+                          "Count":  2
+                      }
+                  ],
+        "Count":  2
+    }
+]

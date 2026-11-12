@@ -37,7 +37,15 @@ uint8_t get_analog_input(uint8_t index);
 uint8_t get_dimmable_output(uint8_t index); 
 uint8_t get_rgb_value(uint8_t index);
 uint8_t get_canbus_connection_status();
+/** IO modul Wi-Fi / BLE / MQTT (CAN 0x100 data[6], CAN bagliyken gecerli). */
+uint8_t get_io_wifi_link(void);
+uint8_t get_io_ble_link(void);
+uint8_t get_io_mqtt_link(void);
 void send_can_frame(uint32_t id, uint8_t *data);
+/** Display panel aktif/pasif → IO SoT (CAN 0x761). */
+void hexnet_can_push_io_profile_set(void);
+/** Display isim/ikon → IO SoT (CAN 0x762/0x763), tablet BLE channels icin. */
+void hexnet_can_push_relay_label(int slot, const char *name, const char *icon);
 uint8_t get_sensorTemp();
 uint8_t get_sensorHum();
 

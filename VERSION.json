@@ -1,0 +1,18 @@
+{
+    "product":  "vango-display7",
+    "name":  "VanGO Display 7\"",
+    "line":  "v0-50",
+    "makro":  "v0.50",
+    "mikro":  "v0.50-0009",
+    "semver":  "0.50.0",
+    "versionCode":  5009,
+    "build_date":  "2026-11-10",
+    "build_name":  "VanGO-Display7-v0-50",
+    "modules":  {
+                    "ui":  "v0.50-0009",
+                    "can":  "v0.50-0009",
+                    "lvgl":  "v0.50-0009"
+                },
+    "notes":  "defer labels NVS off LVGL task (Kaydet crash fix)",
+    "source_stamp":  "labels-nvs-defer-0009"
+}

@@ -98,7 +98,7 @@ void btnDimsCallbackFunc(lv_event_t * e)
 	
 	// Show only the configured number of dim widgets
 	extern int numOfDims; // Access the global variable
-	extern int dimsBuffer[4]; // Access the dims buffer
+	extern int dimsBuffer[8]; // Access the dims buffer
 	extern const char* lblBtnNames[16]; // Access the button names array
 	extern const char* lblDimBtnNames[8]; // Access the dim button names array
 	extern const char* lblDimBtnNames_TR[8];

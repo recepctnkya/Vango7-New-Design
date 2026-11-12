@@ -9,6 +9,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/timers.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_log.h"
@@ -81,6 +82,8 @@ enum{
 };
 
 void ble_init(void);
+/** Call after LVGL dash is up — avoids BLE connect OOM reset during boot. */
+void ble_start_advertising(void);
 static uint8_t find_char_and_desr_index(uint16_t handle);
 static bool store_wr_buffer(esp_ble_gatts_cb_param_t *p_data);
 static void free_write_buffer(void);

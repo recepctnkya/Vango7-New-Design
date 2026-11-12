@@ -7,9 +7,10 @@
 #include "esp_err.h"
 
 #define HEXNET_IO_RELAY_SLOTS   16
-#define HEXNET_IO_DIM_SLOTS     4
+#define HEXNET_IO_DIM_SLOTS     8
 #define HEXNET_IO_SENSOR_SLOTS  5
 #define HEXNET_IO_TANK_SLOTS    4
+#define HEXNET_IO_MOTOR_SLOTS   2
 
 /** Kaynak bayrakları (hangi istemci profili güncelledi / bağlı sayılır). */
 #define HEXNET_IO_LINK_DISPLAY 0x01
@@ -21,7 +22,7 @@ typedef struct {
     uint8_t num_dims;
     uint8_t num_sensors;
     uint8_t num_tanks;
-    uint8_t motor_enabled;
+    uint8_t motor_enabled; /* bit0 = Motor 1, bit1 = Motor 2 */
     uint8_t rgb_enabled;
     uint16_t relay_enable_mask;
     uint8_t dim_enable_mask;
@@ -38,6 +39,14 @@ void hexnet_io_profile_init(void);
 const hexnet_io_profile_t *hexnet_io_profile_get(void);
 
 esp_err_t hexnet_io_profile_save(void);
+
+/** Yeni ayar ekranı: slot aç/kapa ve tip. Flash'a yazar, yeniden başlatmaz. */
+esp_err_t hexnet_io_profile_set_relay(int index, bool enabled, int type);
+esp_err_t hexnet_io_profile_set_dim(int index, bool enabled, int type);
+esp_err_t hexnet_io_profile_set_sensor(int index, bool enabled);
+esp_err_t hexnet_io_profile_set_tank(int index, bool enabled);
+esp_err_t hexnet_io_profile_set_motor(int index, bool enabled);
+esp_err_t hexnet_io_profile_set_rgb(bool enabled);
 
 /** BLE Configuration JSON veya platform io_config_set. */
 esp_err_t hexnet_io_profile_apply_json(const cJSON *json, uint8_t link_flag);
@@ -65,5 +74,11 @@ bool hexnet_io_profile_apply_can_core(uint16_t relay_mask,
                                       uint8_t rgb_enabled,
                                       uint8_t seq);
 
+/** CAN 0x111/0x112: 16× relay_type (1..18). @return true degisti */
+bool hexnet_io_profile_apply_can_relay_types(const uint8_t types[HEXNET_IO_RELAY_SLOTS]);
+
 /** CAN SoT degisince true; bir kez okununca temizlenir. */
 bool hexnet_io_profile_consume_ui_dirty(void);
+
+/** Ertelemeli NVS flush (LVGL task disinda / periyodik cagir). */
+void hexnet_io_profile_poll_save(void);
